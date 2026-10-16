@@ -1,0 +1,17 @@
+# Změny
+
+## 1.1.0 — 16. 10. 2026
+
+- Adaptivní ikona bez bílého podkladu v rozích.
+- Názvy podle dne: `16.10.2026`, `16.10.2026 2`, …; staré automatické názvy se převedou, vlastní názvy zůstanou.
+- Nastavení oznámení přímo dostupné v aplikaci: zobrazení/zvuk, podrobnosti, tlačítka a soukromí. Nahrávání může běžet i s oznámením vypnutým uživatelem v Androidu.
+- Widget mění ovládací prvky podle velikosti: předvolený čas, 1 minuta, 5 minut, Spustit/Pokračovat a Zastavit.
+- Předvolby bufferu 5/10/20/30/60 minut; úseky 1/2,5/5/10/20/30 minut podle kapacity bufferu.
+- Ořez a zesílení 0–18 dB; výsledek se ukládá jako nová kopie.
+- Otevření složky z Historie; bezpečné zpřístupnění soukromých nahrávek přes MediaStore.
+- Odstraněné experimentální externí ovládání a text o tlačítkách hlasitosti.
+- Menší optimalizované instalační APK, zachovaný podpis pro aktualizaci verze 1.0.0.
+
+## 1.0.0 — 15. 10. 2026
+
+První funkční verze: rotující diskový PCM buffer, AAC/M4A export souběžný s nahráváním, české Compose UI, historie, oznámení, dlaždice a widget.

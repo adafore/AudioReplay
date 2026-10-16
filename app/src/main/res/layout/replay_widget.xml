@@ -1,0 +1,5 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:gravity="center" android:background="@drawable/widget_bg" android:id="@+id/widget_root">
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AudioReplay" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold" />
+    <TextView android:id="@+id/widget_status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Otevřít aplikaci" android:textColor="#BBE9D4" android:padding="6dp" />
+</LinearLayout>
