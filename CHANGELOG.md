@@ -1,5 +1,14 @@
 # Změny
 
+## 1.2.0 — 25. 10. 2026
+
+- Automatické čekání na mikrofon při hovoru, obsazení jinou aplikací nebo dočasném výpadku vstupu; po uvolnění naváže na stávající historii.
+- Kontrola dostupnosti při chybě každé 2 sekundy, opětovné otevření ve stejném PCM formátu bez vymazání bufferu. Přerušení se ve zvuku vynechá a je uvedené na obrazovce Záznam.
+- Ruční Pozastavit a Zastavit ruší i čekání a další pokusy. Staré události původního vstupu nemohou nahrávání znovu spustit.
+- Nastavení hlasitosti ukládaného zvuku 0–18 dB přímo na Záznamu i v Nastavení, předvolby 0/6/12/18 dB.
+- Samostatné tlačítko Zesílit nahrávku v Historii pro hlasitější kopii celého souboru, bez nutnosti vybírat ořez. Originál zůstává zachovaný.
+- Aktualizované stavy oznámení, widgetu a dlaždice při čekání na mikrofon.
+
 ## 1.1.0 — 16. 10. 2026
 
 - Adaptivní ikona bez bílého podkladu v rozích.

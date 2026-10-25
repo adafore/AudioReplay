@@ -17,6 +17,8 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.util.UUID
 import cz.audioreplay.core.SegmentStore
+import android.content.ComponentName
+import cz.audioreplay.fixture.CompetingMicrophoneActivity
 
 @RunWith(AndroidJUnit4::class)
 class RecordingServiceTest {
@@ -24,7 +26,7 @@ class RecordingServiceTest {
     private fun await(message: String, timeout: Long = 15000, predicate: () -> Boolean) {
         val end = android.os.SystemClock.elapsedRealtime() + timeout
         while (!predicate() && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(50)
-        assertTrue(message,predicate())
+        assertTrue("$message: ${app.graph.state.value}",predicate())
     }
     @Test fun realMicrophoneSavePauseResumeAndStop() = runBlocking {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
@@ -84,6 +86,41 @@ class RecordingServiceTest {
             InstrumentationRegistry.getInstrumentation().runOnMainSync { ReplayService.instance?.command(ReplayService.STOP) }
             app.graph.database.recordings().all().filter { it.id !in originalIds }.forEach { app.graph.recordings.delete(it) }
             dir.deleteRecursively()
+        }
+    }
+    @Test fun anotherAppCanUseMicrophoneTwiceAndRecordingAutomaticallyContinues() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val testPackage = instrumentation.context.packageName
+        automation.grantRuntimePermission(app.packageName,Manifest.permission.RECORD_AUDIO)
+        automation.grantRuntimePermission(testPackage,Manifest.permission.RECORD_AUDIO)
+        app.graph.settingsReady.await()
+        val previous = app.graph.settings.value
+        app.graph.settingsRepository.update { it.copy(onboardingDone = true,bufferDurationSec = 60,vibration = false) }
+        fun closeCompetitor() { app.sendBroadcast(Intent(CompetingMicrophoneActivity.CLOSE).setPackage(testPackage)) }
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                scenario.onActivity { ContextCompat.startForegroundService(it,Intent(it,ReplayService::class.java).setAction(ReplayService.START)) }
+                await("No initial real audio") { app.graph.state.value.status == CaptureStatus.RECORDING && app.graph.store.availableSeconds() >= 1 }
+                val session = app.graph.store.snapshot(60).use { it.sessionId }
+                repeat(2) {
+                    app.startActivity(Intent().setComponent(ComponentName(testPackage,CompetingMicrophoneActivity::class.java.name)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    await("Competing UID did not silence capture") { app.graph.state.value.status == CaptureStatus.WAITING }
+                    Thread.sleep(500)
+                    val before = app.graph.store.availableFrames()
+                    Thread.sleep(500)
+                    assertEquals("Muted PCM entered the buffer",before,app.graph.store.availableFrames())
+                    closeCompetitor()
+                    await("Real microphone did not automatically resume") { app.graph.state.value.status == CaptureStatus.RECORDING && app.graph.store.availableFrames() > before }
+                    assertEquals(session,app.graph.store.snapshot(60).use { it.sessionId })
+                }
+                assertEquals(2,app.graph.state.value.interruptionCount)
+            }
+        } finally {
+            closeCompetitor()
+            instrumentation.runOnMainSync { ReplayService.instance?.command(ReplayService.STOP) }
+            await("Service cleanup failed") { ReplayService.instance == null }
+            app.graph.settingsRepository.update { previous }
         }
     }
 }

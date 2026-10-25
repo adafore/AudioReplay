@@ -45,6 +45,14 @@ class SegmentStore(
         segments.clear()
         rate = sampleRate; total = 0; floorFrame = 0; originNanos = monotonicNanos; session = UUID.randomUUID().toString()
     }
+    /** An automatic microphone recovery appends real audio to the same history.
+     * No samples are fabricated for the interruption; the PCM format must stay identical.
+     */
+    @Synchronized fun resumeSession(sampleRate: Int) {
+        check(session.isNotEmpty()) { "Session has not started" }
+        require(sampleRate == rate) { "Při obnovení musí zůstat stejný formát zvuku." }
+        finishWriting()
+    }
     @Synchronized fun append(pcm16: ByteArray, length: Int = pcm16.size) {
         require(length in 0..pcm16.size && length % 2 == 0)
         check(session.isNotEmpty()) { "Session has not started" }

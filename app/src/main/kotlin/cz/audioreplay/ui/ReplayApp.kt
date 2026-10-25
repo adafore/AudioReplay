@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -103,6 +104,8 @@ import kotlin.math.roundToInt
 }
 @Composable private fun Dashboard(g: AppGraph, state: ReplayState, settings: ReplaySettings, start: () -> Unit) {
     val active = state.status == CaptureStatus.RECORDING
+    val canPause = state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING)
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Heading("AudioReplay", "Zachyťte okamžik.", "Průběžná paměť pro zvuk kolem vás.")
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(28.dp)) {
@@ -110,7 +113,7 @@ import kotlin.math.roundToInt
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(if (active) Icons.Default.Mic else Icons.Default.MicOff, null)
                     Spacer(Modifier.width(8.dp))
-                    Text(when(state.status) { CaptureStatus.RECORDING -> "Mikrofon nahrává"; CaptureStatus.STARTING -> "Spouštění mikrofonu…"; CaptureStatus.PAUSED -> "Pozastaveno · mikrofon vypnutý"; CaptureStatus.ERROR -> "Mikrofon neběží · chyba"; else -> "Připraveno ke spuštění" }, style = MaterialTheme.typography.titleMedium)
+                    Text(when(state.status) { CaptureStatus.RECORDING -> "Mikrofon nahrává"; CaptureStatus.STARTING -> "Spouštění mikrofonu…"; CaptureStatus.WAITING -> "Čekám na mikrofon · automaticky navážu"; CaptureStatus.PAUSED -> "Pozastaveno · mikrofon vypnutý"; CaptureStatus.ERROR -> "Mikrofon neběží · chyba"; else -> "Připraveno ke spuštění" }, style = MaterialTheme.typography.titleMedium)
                 }
                 Spacer(Modifier.height(28.dp))
                 Text(clock(state.availableSeconds.toInt()), style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Medium)
@@ -127,20 +130,41 @@ import kotlin.math.roundToInt
         }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = { if (active) ReplayService.instance?.command(ReplayService.PAUSE) else start() },
+            OutlinedButton(onClick = { if (canPause) ReplayService.instance?.command(ReplayService.PAUSE) else start() },
                 enabled = state.status != CaptureStatus.STARTING, modifier = Modifier.weight(1f)) {
-                Icon(if (active) Icons.Default.Pause else Icons.Default.PlayArrow, null)
-                Text(if (active) "Pozastavit" else if (state.status == CaptureStatus.PAUSED) "Pokračovat" else "Spustit")
+                Icon(if (canPause) Icons.Default.Pause else Icons.Default.PlayArrow, null)
+                Text(if (canPause) "Pozastavit" else if (state.status == CaptureStatus.PAUSED) "Pokračovat" else "Spustit")
             }
             OutlinedButton(onClick = { ReplayService.instance?.command(ReplayService.STOP) }, enabled = state.serviceRunning, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Default.Stop, null); Text("Zastavit")
             }
         }
         Spacer(Modifier.height(24.dp))
+        GainControl(settings.recordingGainDb) { value -> scope.launch { g.settingsRepository.update { it.copy(recordingGainDb = value) } } }
+        Spacer(Modifier.height(12.dp))
+        if (state.interruptionCount > 0) {
+            InfoCard("Záznam byl přerušen (${state.interruptionCount}×)", "Historie před přerušením zůstává zachovaná. Uložený zvuk na ni naváže; doba bez přístupu k mikrofonu ve zvuku chybí.")
+            Spacer(Modifier.height(12.dp))
+        }
         InfoCard("Ukládání pokračuje souběžně", "${state.pendingExports} exportů ve frontě · přibližně ${size(Durations.estimatedBytes(settings.saveDurationSec, settings.bitrate))} na úsek. Během exportu můžete dál nahrávat.")
         if (state.lastSaved != null) { Spacer(Modifier.height(12.dp)); InfoCard("Poslední uložení", state.lastSaved) }
         if (state.status == CaptureStatus.PAUSED) { Spacer(Modifier.height(12.dp)); Text("Po pokračování začne nová historie. Pauzu do uloženého zvuku nespojujeme.") }
         state.message?.let { Spacer(Modifier.height(16.dp)); Text(it, color = if (state.status == CaptureStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable private fun GainControl(value: Int, commit: (Int) -> Unit) {
+    var draft by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp)) {
+            Text("Hlasitost ukládaného zvuku", style = MaterialTheme.typography.titleMedium)
+            Text("Zesílení +${draft.roundToInt()} dB", style = MaterialTheme.typography.bodyLarge)
+            Slider(draft, { draft = it }, valueRange = 0f..18f, steps = 17, onValueChangeFinished = { commit(draft.roundToInt()) })
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(0, 6, 12, 18).forEach { gain -> FilterChip(value == gain, { draft = gain.toFloat(); commit(gain) }, label = { Text("+$gain dB") }) }
+            }
+            Text("Pro další uložení, i z aktuálního bufferu. +6 dB je přibližně dvojnásobná amplituda. Příliš vysoké zesílení může zvuk zkreslit.", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -193,6 +217,7 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
         DurationEditor("Délka ukládaného úseku", settings.saveDurationSec, settings.bufferDurationSec, listOf(60,150,300,600,1200,1800)) { value -> update { it.copy(saveDurationSec = value) } }
         Text("Zvětšení bufferu přidá prostor pro budoucí zvuk. Již dostupná historie se tím neprodlouží.", style = MaterialTheme.typography.bodySmall)
         SectionTitle("Kvalita a soubory")
+        GainControl(settings.recordingGainDb) { value -> update { it.copy(recordingGainDb = value) } }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(32000,64000,128000).forEach { bitrate -> FilterChip(settings.bitrate == bitrate, { update { it.copy(bitrate = bitrate) } }, label = { Text("${bitrate / 1000} kb/s") }) }
         }
@@ -250,6 +275,7 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
     var renameText by remember { mutableStateOf("") }
     var renameError by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf<Recording?>(null) }
+    var gainOnly by remember { mutableStateOf(false) }
     var folderDialog by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
     val state by g.state.collectAsStateWithLifecycle()
@@ -324,19 +350,22 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             IconButton(onClick = { play(recording) }) { Icon(Icons.Default.PlayArrow, "Přehrát nahrávku") }
                             IconButton(onClick = { rename = recording; renameText = recording.name.removeSuffix(".m4a"); renameError = null }) { Icon(Icons.Default.Edit, "Přejmenovat") }
-                            IconButton(onClick = { editing = recording },enabled = state.pendingExports < 3) { Icon(Icons.Default.ContentCut,"Oříznout a zesílit") }
+                            IconButton(onClick = { gainOnly = false; editing = recording },enabled = state.pendingExports < 3) { Icon(Icons.Default.ContentCut,"Oříznout a zesílit") }
                             IconButton(onClick = {
                                 runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("audio/mp4")
                                     .putExtra(Intent.EXTRA_STREAM, g.recordings.uri(recording)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Sdílet nahrávku")) }.onFailure { g.message("Sdílení selhalo: ${it.localizedMessage}") }
                             }) { Icon(Icons.Default.Share, "Sdílet") }
                             IconButton(onClick = { remove = recording }) { Icon(Icons.Default.Delete, "Smazat") }
                         }
+                        TextButton(onClick = { gainOnly = true; editing = recording }, enabled = state.pendingExports < 3) {
+                            Icon(Icons.AutoMirrored.Filled.VolumeUp, null); Spacer(Modifier.width(8.dp)); Text("Zesílit nahrávku")
+                        }
                     }
                 }
             }
         }
     }
-    editing?.let { recording -> AudioEditDialog(recording,onDismiss = { editing = null }) { edit ->
+    editing?.let { recording -> AudioEditDialog(recording,onDismiss = { editing = null },gainOnly = gainOnly) { edit ->
         runCatching {
             ContextCompat.startForegroundService(context,Intent(context,ReplayService::class.java).setAction(ReplayService.EDIT)
                 .putExtra("recording",recording.id).putExtra("from",edit.startUs).putExtra("to",edit.endUs).putExtra("gain",edit.gainDb))

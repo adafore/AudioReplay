@@ -2,11 +2,11 @@
 
 Uložte zvuk, který už zazněl. Nativní aplikace pro Android s průběžným diskovým bufferem, rychlým uložením posledních minut a úpravami nahrávek. České rozhraní, světlý i tmavý motiv, bez cloudu a bez oprávnění k internetu.
 
-**[Stáhnout nejnovější APK zdarma](https://github.com/adafore/AudioReplay/releases/latest)** · [Změny ve verzi 1.1.0](CHANGELOG.md) · [Výsledky testů](TESTOVANI.md)
+**[Stáhnout nejnovější APK zdarma](https://github.com/adafore/AudioReplay/releases/latest)** · [Změny ve verzi 1.2.0](CHANGELOG.md) · [Výsledky testů](TESTOVANI.md)
 
 ## Instalace do telefonu
 
-1. V telefonu otevřete odkaz na nejnovější vydání a v části **Assets** stáhněte soubor `AudioReplay-1.1.0.apk`.
+1. V telefonu otevřete odkaz na nejnovější vydání a v části **Assets** stáhněte soubor `AudioReplay-1.2.0.apk`.
 2. Otevřete stažený soubor. Pokud Android požádá o povolení instalace z prohlížeče nebo správce souborů, potvrďte je pro tuto instalaci.
 3. Otevřete AudioReplay, projděte úvod a klepněte na **Spustit**. Pro záznam povolte mikrofon. Oznámení jsou volitelná.
 
@@ -17,6 +17,9 @@ Podporován je Android 10 a novější. Obchod Google Play ani placený účet n
 - **Buffer** uchovává až 60 minut; výchozí je 30 minut. Délka ukládaného úseku je nezávislá, výchozí 5 minut. Předvolby bufferu jsou 5/10/20/30/60 minut, úseku 1/2,5/5/10/20/30 minut. Číselné pole a posuvník dovolují i jiné hodnoty od 10 s.
 - **Uložit** vytvoří M4A z reálně dostupné historie a nahrávání pokračuje. Pokud historie ještě nestačí, uloží se její dostupná část. Fronta přijme nejvýše 3 souběžně zadané úlohy.
 - **Pozastavit** vypne mikrofon a zachová dosavadní historii pro uložení. Pokračování začne novou souvislou historii. **Zastavit** zruší dočasný buffer, dokončené nahrávky ponechá a již zadané ukládání dokončí.
+- **Automatické navázání po výpadku:** při dočasném zabrání mikrofonu hovorem či jinou aplikací přejde záznam do stavu **Čekám na mikrofon**. Po uvolnění automaticky naváže na dosavadní buffer. Při chybě zvukového vstupu kontroluje jeho dostupnost každé 2 sekundy a podle potřeby znovu otevře AudioRecord ve stejném formátu. Ztlumený stream ponechává Androidu k automatickému obnovení, nepřetahuje se s druhou aplikací opakovaným spouštěním. Ruční Pozastavit/Zastavit čekání zruší. Při odebraném oprávnění nebo chybě úložiště je potřeba zásah uživatele.
+- Během výpadku se nezapisuje náhradní ticho. Předchozí a následující zachycený zvuk se v uloženém úseku spojí; chybějící dobu nelze zpětně obnovit. Počet přerušení a upozornění jsou na obrazovce Záznam. Dostupná historie udává délku skutečně zachyceného zvuku.
+- **Hlasitost ukládaného zvuku** na obrazovce Záznam i v Nastavení nastavuje zesílení 0–18 dB pro další uložení, včetně právě dostupného bufferu. Začněte například +6 dB. Zesílení se provede při exportu; původní PCM v bufferu se nemění. Výchozí 0 dB ponechává původní hlasitost. Pro starší soubory použijte **Historie → Zesílit nahrávku** a uložte hlasitější kopii; originál zůstane zachovaný. Nastavení nových ukládání se na editované kopie nepřičítá podruhé.
 - Nahrávky se jmenují jen datem dne, například `16.10.2026.m4a`, další `16.10.2026 2.m4a`. Staré automatické názvy z verze 1.0.0 se převedou; vlastní názvy aplikace nemění.
 - V **Historii** lze přehrávat a posouvat zvuk, hledat, řadit, přejmenovat, sdílet a mazat. Tlačítko nůžek otevře **Oříznout a zesílit**: vyberte časový úsek a zesílení 0–18 dB. Výsledek se uloží jako nová kopie v aktuálně nastavené kvalitě. Vysoké zesílení může zvuk zkreslit; přetečení vzorků je ošetřeno saturací.
 - Tlačítko složky v Historii otevře `Recordings/AudioReplay` (Android 10–11: `Music/AudioReplay`). Pokud existují soukromé nahrávky, nabídne nejprve jejich bezpečné přesunutí do veřejné složky a používání této složky pro další ukládání. Správce souborů nemá přímý přístup do soukromého adresáře aplikace.
@@ -72,12 +75,12 @@ Uložení si při stisku rezervuje přesné rozsahy segmentů, včetně otevřen
 
 Hotový soubor se synchronizuje a ověří. Soukromý se atomicky přejmenuje; veřejný je během kopírování v MediaStore označen `IS_PENDING` a zveřejní se až kompletní. AtomicFile journal umožňuje obnovit metadata nebo odstranit neúplnou publikaci. Room schéma zůstává kompatibilní s 1.0.0. Úpravy, publikace a ukládání se serializují a původní média zůstávají chráněná.
 
-Nahrávání nemá automatický restart po pádu ani po startu telefonu. Proces vždy začíná ve vypnutém stavu a starý dočasný PCM buffer zahodí. Uložená média zůstanou. Soukromé nahrávky se při odinstalaci odstraní, veřejné zůstanou ve složce telefonu.
+Po ukončení celého procesu nebo restartu telefonu se mikrofon automaticky nespouští. Nový proces začíná ve vypnutém stavu a starý dočasný PCM buffer zahodí. Automatické navázání funguje v již spuštěné mikrofonní foreground službě. Uložená média zůstanou. Soukromé nahrávky se při odinstalaci odstraní, veřejné zůstanou ve složce telefonu.
 
 ## Ověření a omezení
 
 Skutečné výsledky jsou v [TESTOVANI.md](TESTOVANI.md). Emulátor ověřuje AudioRecord a kodeky, nenahrazuje dlouhý fyzický test Xiaomi/HyperOS, správce baterie, skutečné hovory a směrování zvuku. Zamykací obrazovka může podle nastavení telefonu skrýt obsah či akce oznámení. Přehrávání se při odchodu z aplikace pozastaví.
 
-Nedostatek místa, přerušení mikrofonu, detekovaná změna vstupu nebo chyba kodeku mají viditelný chybový stav. Wake lock se drží při záznamu a práci se soubory, poté se uvolní. Přesnou spotřebu baterie aplikace netvrdí. Respektujte soukromí ostatních.
+Nedostatek místa, odebrané oprávnění a chyba kodeku mají viditelný chybový stav; dočasné přerušení mikrofonu má stav čekání s automatickým navázáním. Android při změně vstupu zachovává požadovaný klientský PCM formát. Wake lock se drží při záznamu a práci se soubory, poté se uvolní. Přesnou spotřebu baterie aplikace netvrdí. Respektujte soukromí ostatních.
 
-Platformní pravidla: [foreground mikrofon](https://developer.android.com/develop/background-work/services/fgs/service-types#microphone), [spuštění služby z widgetu](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start), [volitelná oznámení](https://developer.android.com/develop/ui/views/notifications/notification-permission), [nastavení kategorií oznámení](https://developer.android.com/develop/ui/views/notifications/channels), [responzivní widgety](https://developer.android.com/develop/ui/views/appwidgets/layouts).
+Platformní pravidla: [sdílení a přerušení mikrofonu](https://developer.android.com/media/platform/sharing-audio-input), [foreground mikrofon](https://developer.android.com/develop/background-work/services/fgs/service-types#microphone), [spuštění služby z widgetu](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start), [volitelná oznámení](https://developer.android.com/develop/ui/views/notifications/notification-permission), [nastavení kategorií oznámení](https://developer.android.com/develop/ui/views/notifications/channels), [responzivní widgety](https://developer.android.com/develop/ui/views/appwidgets/layouts).

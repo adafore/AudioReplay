@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.room.Room
 import cz.audioreplay.audio.AacExporter
 import cz.audioreplay.audio.AudioEditor
+import cz.audioreplay.audio.AudioCapture
+import cz.audioreplay.audio.CaptureDriver
 import cz.audioreplay.service.RecordingNotice
 import cz.audioreplay.core.ReplaySettings
 import cz.audioreplay.core.SegmentStore
@@ -12,7 +14,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 
-enum class CaptureStatus { IDLE, STARTING, RECORDING, PAUSED, ERROR }
+enum class CaptureStatus { IDLE, STARTING, RECORDING, WAITING, PAUSED, ERROR }
 data class ReplayState(
     val status: CaptureStatus = CaptureStatus.IDLE,
     val availableSeconds: Double = 0.0,
@@ -24,6 +26,7 @@ data class ReplayState(
     val serviceRunning: Boolean = false,
     val editProgress: Float? = null,
     val editingName: String? = null,
+    val interruptionCount: Int = 0,
 )
 class ReplayApplication : Application() {
     lateinit var graph: AppGraph; private set
@@ -41,6 +44,7 @@ class AppGraph(val app: Application) {
     val recordings = RecordingsRepository(app, database.recordings())
     val exporter = AacExporter()
     val editor = AudioEditor(app)
+    internal var captureFactory: () -> CaptureDriver = { AudioCapture(app, store) }
     init {
         RecordingNotice.ensure(app)
         scope.launch { settingsRepository.flow.first(); settingsReady.complete(Unit) }

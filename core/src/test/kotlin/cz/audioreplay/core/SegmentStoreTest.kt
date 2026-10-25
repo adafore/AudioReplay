@@ -50,6 +50,35 @@ class SegmentStoreTest {
     @Test fun stopDeletesCacheButPreservesReservedExport() {
         val folder = temporary.newFolder(); val store = SegmentStore(folder,10); store.beginSession(10,0); store.append(pcm(0,100)); val export = store.snapshot(10); store.close(); assertEquals(0.0,store.availableSeconds(),0.0); assertEquals((0..99).toList(),read(export)); export.close(); assertTrue(folder.listFiles()!!.isEmpty())
     }
+    @Test fun automaticRecoveryAppendsWithoutResettingHistoryOrSession() {
+        SegmentStore(temporary.newFolder(),30).use { store ->
+            store.beginSession(10,100); store.append(pcm(0,13))
+            store.snapshot(30).use { before ->
+                store.finishWriting(); store.resumeSession(10); store.append(pcm(13,17))
+                store.snapshot(30).use { after ->
+                    assertEquals(before.sessionId,after.sessionId)
+                    assertEquals((0..29).toList(),read(after))
+                    assertEquals(3.0,store.availableSeconds(),0.0)
+                }
+                assertEquals((0..12).toList(),read(before))
+            }
+        }
+    }
+    @Test fun recoveryRejectsDifferentSampleRateAndPreservesExistingAudio() {
+        SegmentStore(temporary.newFolder(),30).use { store ->
+            store.beginSession(10,0); store.append(pcm(0,20)); store.finishWriting()
+            assertThrows(IllegalArgumentException::class.java) { store.resumeSession(20) }
+            store.snapshot(30).use { assertEquals((0..19).toList(),read(it)) }
+        }
+    }
+    @Test fun repeatedRecoveriesStillRespectRetentionAndPinnedExports() {
+        SegmentStore(temporary.newFolder(),10).use { store ->
+            store.beginSession(10,0); store.append(pcm(0,50)); val reserved = store.snapshot(10)
+            repeat(5) { index -> store.finishWriting(); store.resumeSession(10); store.append(pcm((index+1)*50,50)) }
+            store.snapshot(10).use { assertEquals((200..299).toList(),read(it)) }
+            assertEquals((0..49).toList(),read(reserved)); reserved.close()
+        }
+    }
     @Test fun oldCacheCleanupDoesNotTouchSavedMedia() {
         val folder = temporary.newFolder(); File(folder,"stale.pcm").writeBytes(byteArrayOf(1)); val saved = File(folder,"saved.m4a").apply { writeBytes(byteArrayOf(2)) }; SegmentStore.discardStale(folder); assertEquals(listOf(saved),folder.listFiles()!!.toList())
     }

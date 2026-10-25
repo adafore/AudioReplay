@@ -6,7 +6,12 @@ import android.content.pm.ServiceInfo
 import android.os.*
 import androidx.core.app.NotificationCompat
 import cz.audioreplay.*
-import cz.audioreplay.audio.AudioCapture
+import cz.audioreplay.audio.CaptureDriver
+import cz.audioreplay.audio.CaptureListener
+import cz.audioreplay.audio.CaptureFailure
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import cz.audioreplay.controls.*
 import cz.audioreplay.core.Durations
 import cz.audioreplay.core.PressGate
@@ -24,19 +29,22 @@ class ReplayService : Service() {
     private val controls = Mutex()
     private val encoder = Mutex()
     private val gate = PressGate()
-    private lateinit var capture: AudioCapture
+    private lateinit var capture: CaptureDriver
     private val g get() = graph
     private var stopping = false
     private var foreground = false
     private var captureSession = false
     private var editingJob: String? = null
+    private var captureWanted = false
+    private var captureOpen = false
+    private var sessionRate: Int? = null
+    private var captureGeneration = 0L
+    private var recoveryJob: Job? = null
 
     override fun onCreate() {
         super.onCreate(); instance = this
         g.state.update { it.copy(serviceRunning = true) }
-        capture = AudioCapture(this, g.store) { error -> scope.launch { controls.withLock {
-            stopCapture(CaptureStatus.ERROR, error, false); updateNotification()
-        } } }
+        capture = g.captureFactory()
         RecordingNotice.ensure(this)
         scope.launch {
             g.settings.collect { settings ->
@@ -79,35 +87,89 @@ class ReplayService : Service() {
             stopSelf(); return START_NOT_STICKY
         }
         scope.launch { controls.withLock {
-            if (g.state.value.status == CaptureStatus.RECORDING) return@withLock
+            if (captureWanted) return@withLock
             stopping = false
             g.settingsReady.await()
             if (intent.getStringExtra("source") == "widget" && !g.settings.value.widgetEnabled) {
                 if (g.state.value.status == CaptureStatus.IDLE && g.state.value.pendingExports == 0) stopSelf()
                 return@withLock
             }
-            g.state.update { it.copy(status = CaptureStatus.STARTING, message = null) }
-            try {
-                val rate = withContext(Dispatchers.IO) { capture.start() }
-                g.state.update { it.copy(status = CaptureStatus.RECORDING, sampleRate = rate, availableSeconds = 0.0) }
-            } catch (e: Exception) {
-                g.state.update { it.copy(status = CaptureStatus.ERROR, message = e.localizedMessage ?: "Mikrofon se nepodařilo spustit.") }
+            sessionRate = null
+            captureWanted = true
+            g.state.update { it.copy(status = CaptureStatus.STARTING, message = null, interruptionCount = 0) }
+            recoveryJob?.cancel()
+            recoveryJob = scope.launch {
+                while (isActive && captureWanted) {
+                    controls.withLock { if (captureWanted && !captureOpen) tryCapture() }
+                    delay(2000)
+                }
             }
             updateNotification()
         } }
         return START_NOT_STICKY
     }
 
+    /** Runs only in the already user-started microphone foreground service. */
+    private suspend fun tryCapture() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            captureFailed(CaptureFailure("Povolte mikrofon v nastavení aplikace a záznam znovu spusťte.", false))
+            return
+        }
+        val generation = ++captureGeneration
+        try {
+            val reason = withContext(Dispatchers.IO) { capture.stop(); capture.blockedReason() }
+            if (!captureWanted) return
+            if (reason != null) { waiting(reason); return }
+            val rate = withContext(Dispatchers.IO) {
+                capture.start(sessionRate, object : CaptureListener {
+                    override fun onAvailability(available: Boolean) { scope.launch { controls.withLock {
+                        if (!captureWanted || generation != captureGeneration || !captureOpen) return@withLock
+                        if (available) g.state.update { it.copy(status = CaptureStatus.RECORDING,
+                            message = if (it.interruptionCount > 0) "Mikrofon je opět dostupný. Pokračuji v dosavadní historii; zvuk během přerušení chybí." else null) }
+                        else waiting("Mikrofon dočasně používá jiná aplikace nebo je vypnutý. Čekám a automaticky navážu.")
+                        updateNotification()
+                    } } }
+                    override fun onFailure(failure: CaptureFailure) { scope.launch { controls.withLock {
+                        if (!captureWanted || generation != captureGeneration) return@withLock
+                        captureFailed(failure)
+                    } } }
+                })
+            }
+            sessionRate = rate
+            captureOpen = true
+            g.state.update { it.copy(status = CaptureStatus.WAITING, sampleRate = rate, availableSeconds = g.store.availableSeconds()) }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (captureWanted) captureFailed(CaptureFailure(e.localizedMessage ?: "Mikrofon zatím není dostupný.",
+                e !is SecurityException && e !is java.io.IOException && e !is IllegalArgumentException))
+        }
+        updateNotification()
+    }
+    private fun waiting(message: String) {
+        g.state.update { it.copy(status = CaptureStatus.WAITING, message = message,
+            interruptionCount = it.interruptionCount + if (it.status == CaptureStatus.RECORDING) 1 else 0) }
+    }
+    private fun captureFailed(failure: CaptureFailure) {
+        captureOpen = false
+        captureGeneration++ // Late callbacks from the failed stream cannot revive it.
+        if (failure.recoverable) waiting(failure.message + " Automaticky zkusím pokračovat po uvolnění mikrofonu.")
+        else {
+            captureWanted = false
+            g.state.update { it.copy(status = CaptureStatus.ERROR, message = failure.message) }
+        }
+        updateNotification()
+    }
+
     fun command(action: String, source: String = "notification", seconds: Int? = null) {
         when (action) {
             SAVE -> save(source, seconds)
-            PAUSE -> scope.launch { controls.withLock {
-                if (g.state.value.status == CaptureStatus.RECORDING) stopCapture(CaptureStatus.PAUSED,
+            PAUSE -> { captureWanted = false; scope.launch { controls.withLock {
+                if (g.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING)) stopCapture(CaptureStatus.PAUSED,
                     "Pozastaveno. Po pokračování začne nová historie; pauza nebude spojena do souvislého záznamu.", false)
                 updateNotification()
-            } }
+            } } }
             STOP -> {
-                stopping = true
+                stopping = true; captureWanted = false
                 scope.launch { controls.withLock {
                     stopCapture(CaptureStatus.IDLE, "Záznam zastaven. Dočasný buffer byl uvolněn.", true)
                     captureSession = false
@@ -117,12 +179,16 @@ class ReplayService : Service() {
         }
     }
     private suspend fun stopCapture(status: CaptureStatus, message: String?, discard: Boolean) {
+        captureWanted = false
+        recoveryJob?.cancel(); recoveryJob = null
+        captureGeneration++
         withContext(Dispatchers.IO) { capture.stop(); if (discard) g.store.close() }
+        captureOpen = false
         g.state.update { it.copy(status = status, message = message, availableSeconds = g.store.availableSeconds()) }
     }
     private fun save(source: String, seconds: Int? = null) {
         if (stopping) { g.message("Záznam se ukončuje."); return }
-        if (g.state.value.status !in setOf(CaptureStatus.RECORDING, CaptureStatus.PAUSED, CaptureStatus.ERROR)) return
+        if (g.state.value.status !in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.PAUSED, CaptureStatus.ERROR)) return
         val settings = g.settings.value
         if (!gate.accept(source, SystemClock.elapsedRealtime(), settings.doublePress)) {
             g.message("Pro uložení stiskněte stejné tlačítko ještě jednou do 0,9 s.")
@@ -139,7 +205,7 @@ class ReplayService : Service() {
                     wake.acquire(30 * 60 * 1000L)
                     try {
                         val context = currentCoroutineContext()
-                        withContext(Dispatchers.IO) { g.exporter.encode(snapshot, temp, settings.bitrate) { context.ensureActive() } }
+                        withContext(Dispatchers.IO) { g.exporter.encode(snapshot, temp, settings.bitrate, gainDb = settings.recordingGainDb) { context.ensureActive() } }
                         g.mediaReady.await()
                         val saved = g.recordings.publish(temp, snapshot, settings.bitrate, settings.publicStorage)
                         g.state.update { it.copy(lastSaved = saved.name, message = "Uloženo: ${saved.name}") }
@@ -188,7 +254,7 @@ class ReplayService : Service() {
                         }
                         snapshot = decoded
                         withContext(Dispatchers.IO) { g.exporter.encode(decoded,temp,settings.bitrate,
-                            { p -> g.state.update { it.copy(editProgress = 0.55f + p * 0.4f) } }) { context.ensureActive() } }
+                            onProgress = { p -> g.state.update { it.copy(editProgress = 0.55f + p * 0.4f) } }) { context.ensureActive() } }
                         val saved = g.recordings.publish(temp,decoded,settings.bitrate,recording.publicStorage)
                         g.state.update { it.copy(lastSaved = saved.name, message = "Upravená kopie: ${saved.name}") }
                         if (settings.vibration) vibrate()
@@ -226,6 +292,7 @@ class ReplayService : Service() {
             CaptureStatus.RECORDING -> "AudioReplay · Mikrofon nahrává"
             CaptureStatus.PAUSED -> "AudioReplay · Pozastaveno"
             CaptureStatus.STARTING -> "AudioReplay · Spouštění"
+            CaptureStatus.WAITING -> "AudioReplay · Čekám na mikrofon, automaticky navážu"
             CaptureStatus.ERROR -> "AudioReplay · Mikrofon neběží"
             else -> if (state.editingName != null) "AudioReplay · Upravuji nahrávku" else if (state.pendingExports > 0) "AudioReplay · Dokončuji export" else "AudioReplay · Zastaveno"
         }
@@ -237,7 +304,7 @@ class ReplayService : Service() {
         if (private) builder.setPublicVersion(NotificationCompat.Builder(this, RecordingNotice.CHANNEL).setSmallIcon(R.drawable.ic_replay).setContentTitle(title).build())
         if (!stopping && captureSession && g.settings.value.notificationActions) {
             builder.addAction(0, "Uložit ${Durations.label(g.settings.value.saveDurationSec)}", controlIntent(this, SAVE, "notification"))
-            if (state.status == CaptureStatus.RECORDING) builder.addAction(0, "Pozastavit", controlIntent(this, PAUSE, "notification"))
+            if (state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING)) builder.addAction(0, "Pozastavit", controlIntent(this, PAUSE, "notification"))
             else builder.addAction(0, "Pokračovat", openActivity(this, resume = true))
         }
         if (captureSession && g.settings.value.notificationActions) builder.addAction(0, "Zastavit", controlIntent(this, STOP, "notification"))
@@ -248,6 +315,7 @@ class ReplayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onTimeout(startId: Int, fgsType: Int) { command(STOP); scope.launch { delay(1000); stopSelf() } }
     override fun onDestroy() {
+        captureWanted = false; captureGeneration++
         instance = null
         scope.cancel()
         runCatching { capture.stop(); g.store.close() }

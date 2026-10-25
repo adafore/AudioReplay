@@ -36,4 +36,14 @@ data class AudioEdit(val startUs: Long, val endUs: Long, val gainDb: Int) {
 }
 object PcmGain {
     fun apply(sample: Int, gainDb: Int): Int = (sample * 10.0.pow(gainDb / 20.0)).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+    fun applyInPlace(pcm: ByteArray, length: Int, gainDb: Int) {
+        require(gainDb in 0..18 && length in 0..pcm.size && length % 2 == 0)
+        if (gainDb == 0) return
+        val factor = 10.0.pow(gainDb / 20.0)
+        for (i in 0 until length step 2) {
+            val sample = (((pcm[i + 1].toInt() and 255) shl 8) or (pcm[i].toInt() and 255)).toShort().toInt()
+            val amplified = (sample * factor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            pcm[i] = amplified.toByte(); pcm[i + 1] = (amplified shr 8).toByte()
+        }
+    }
 }

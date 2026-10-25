@@ -26,20 +26,21 @@ fun openRecordingsFolder(context: Context, g: AppGraph) {
         .onFailure { g.message("Otevřete ve správci souborů složku ${g.recordings.directoryLabel()}.") }
 }
 
-@Composable fun AudioEditDialog(recording: Recording,onDismiss: () -> Unit,onSave: (AudioEdit) -> Unit) {
+@Composable fun AudioEditDialog(recording: Recording,onDismiss: () -> Unit,gainOnly: Boolean = false,onSave: (AudioEdit) -> Unit) {
     val seconds = recording.durationUs / 1_000_000.0
     var from by remember(recording.id) { mutableStateOf("0") }
     var to by remember(recording.id) { mutableStateOf(String.format(Locale.ROOT,"%.3f",seconds)) }
     var range by remember(recording.id) { mutableStateOf(0f..seconds.toFloat()) }
-    var gain by remember { mutableIntStateOf(0) }
+    var gain by remember(recording.id, gainOnly) { mutableIntStateOf(if (gainOnly) 6 else 0) }
     fun number(text: String): Double? = text.trim().replace(',','.').toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..seconds+0.0005 }
     val start = number(from); val end = number(to)
-    val request = if(start != null && end != null) AudioEdit((start * 1_000_000).roundToLong(),(end * 1_000_000).roundToLong().coerceAtMost(recording.durationUs),gain) else null
+    val request = if (gainOnly) AudioEdit(0, recording.durationUs, gain) else if(start != null && end != null) AudioEdit((start * 1_000_000).roundToLong(),(end * 1_000_000).roundToLong().coerceAtMost(recording.durationUs),gain) else null
     val valid = request != null && runCatching { request.validate(recording.durationUs) }.isSuccess
-    AlertDialog(onDismissRequest = onDismiss,title = { Text("Oříznout a zesílit") },text = {
+    AlertDialog(onDismissRequest = onDismiss,title = { Text(if (gainOnly) "Zesílit nahrávku" else "Oříznout a zesílit") },text = {
         Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(recording.name.removeSuffix(".m4a"))
-            Text("Vyberte začátek a konec. Výsledek se uloží jako nová nahrávka.",style = MaterialTheme.typography.bodySmall)
+            Text(if (gainOnly) "Zvyšte hlasitost celé nahrávky. Výsledek se uloží jako nová kopie, originál zůstane zachovaný." else "Vyberte začátek a konec. Výsledek se uloží jako nová nahrávka.",style = MaterialTheme.typography.bodySmall)
+            if (!gainOnly) {
             RangeSlider(value = range,onValueChange = { selected ->
                 range = selected; from = String.format(Locale.ROOT,"%.3f",selected.start); to = String.format(Locale.ROOT,"%.3f",selected.endInclusive)
             },valueRange = 0f..seconds.toFloat().coerceAtLeast(0.1f))
@@ -50,10 +51,11 @@ fun openRecordingsFolder(context: Context, g: AppGraph) {
                     label = { Text("Do (s)") },singleLine = true,modifier = Modifier.weight(1f),keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),isError = !valid)
             }
             if(!valid) Text("Vyberte alespoň 0,1 s uvnitř nahrávky.",color = MaterialTheme.colorScheme.error,style = MaterialTheme.typography.bodySmall)
+            }
             Text("Zesílení: +$gain dB",style = MaterialTheme.typography.titleSmall)
             Slider(gain.toFloat(),{ gain = it.roundToInt() },valueRange = 0f..18f,steps = 17)
             Text("0 dB zachová hlasitost. Vyšší zesílení může zvuk zkreslit.",style = MaterialTheme.typography.bodySmall)
         }
-    },confirmButton = { TextButton(onClick = { request?.let(onSave) },enabled = valid) { Text("Uložit kopii") } },
+    },confirmButton = { TextButton(onClick = { request?.let(onSave) },enabled = valid && (!gainOnly || gain > 0)) { Text("Uložit kopii") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Zrušit") } })
 }

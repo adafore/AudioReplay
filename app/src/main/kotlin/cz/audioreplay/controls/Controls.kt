@@ -41,11 +41,11 @@ fun updateControls(context: Context) {
 }
 class ReplayTile : TileService() {
     override fun onStartListening() {
-        val active = graph.state.value.status == CaptureStatus.RECORDING
+        val active = graph.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING)
         qsTile?.apply {
             state = if (!graph.settings.value.tileEnabled) Tile.STATE_UNAVAILABLE else if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             label = "AudioReplay"
-            subtitle = if (active) "Uložit ${Durations.label(graph.settings.value.saveDurationSec)}" else "Otevřít aplikaci"
+            subtitle = if (graph.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if (active) "Uložit ${Durations.label(graph.settings.value.saveDurationSec)}" else "Otevřít aplikaci"
             updateTile()
         }
     }
@@ -95,14 +95,14 @@ class ReplayWidget : AppWidgetProvider() {
                 if (layout == WidgetLayout.WIDE || layout == WidgetLayout.FULL) {
                     setOnClickPendingIntent(R.id.widget_start,if(enabled) widgetStartIntent(context) else openActivity(context))
                     setOnClickPendingIntent(R.id.widget_stop,controlIntent(context,ReplayService.STOP,"widget:stop"))
-                    setBoolean(R.id.widget_start,"setEnabled",enabled && !active)
+                    setBoolean(R.id.widget_start,"setEnabled",enabled && g.state.value.status !in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING))
                     setBoolean(R.id.widget_stop,"setEnabled",enabled && g.state.value.serviceRunning)
                     setTextViewText(R.id.widget_start,if(layout == WidgetLayout.WIDE) "▶" else if(g.state.value.status == CaptureStatus.PAUSED) "Pokračovat" else "Spustit")
                     setContentDescription(R.id.widget_start,"Spustit nahrávání")
                     setContentDescription(R.id.widget_stop,"Zastavit nahrávání")
                 }
                 if (layout == WidgetLayout.FULL) {
-                    setTextViewText(R.id.widget_status,"AudioReplay · " + if(!enabled) "Vypnutý widget" else if(active) "Nahrává" else if(g.state.value.status == CaptureStatus.PAUSED) "Pozastaveno" else "Připraveno")
+                    setTextViewText(R.id.widget_status,"AudioReplay · " + if(!enabled) "Vypnutý widget" else if(active) "Nahrává" else if(g.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if(g.state.value.status == CaptureStatus.PAUSED) "Pozastaveno" else "Připraveno")
                     setOnClickPendingIntent(R.id.widget_status,openActivity(context))
                 }
             }

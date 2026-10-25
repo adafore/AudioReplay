@@ -2,13 +2,15 @@ package cz.audioreplay.audio
 
 import android.media.*
 import cz.audioreplay.core.SegmentStore
+import cz.audioreplay.core.PcmGain
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 
 /** Encodes one exact PCM snapshot into a single AAC track; capture never waits for this. */
 class AacExporter {
-    fun encode(snapshot: SegmentStore.Snapshot, target: File, bitrate: Int, onProgress: (Float) -> Unit = {}, checkActive: () -> Unit = {}) {
+    fun encode(snapshot: SegmentStore.Snapshot, target: File, bitrate: Int, gainDb: Int = 0, onProgress: (Float) -> Unit = {}, checkActive: () -> Unit = {}) {
+        require(gainDb in 0..18)
         target.parentFile?.mkdirs()
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
         var muxer: MediaMuxer? = null
@@ -41,6 +43,7 @@ class AacExporter {
                             val buffer = requireNotNull(codec.getInputBuffer(index))
                             buffer.clear()
                             val count = reader.read(scratch, minOf(buffer.remaining(), scratch.size) / 2 * 2)
+                            PcmGain.applyInPlace(scratch, count, gainDb)
                             buffer.put(scratch, 0, count)
                             codec.queueInputBuffer(index, 0, count, fedFrames * 1_000_000L / snapshot.sampleRate,
                                 if (count == 0) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0)

@@ -220,6 +220,35 @@ class AudioPipelineTest {
             assertArrayEquals(original,source.readBytes())
         } finally { source.delete(); dir.deleteRecursively() }
     }
+    @Test fun exportGainMakesDecodedRecordingLouderWithoutChangingBuffer() {
+        val dir = folder()
+        val sourceDir = File(context.filesDir,"recordings").also { it.mkdirs() }
+        val plain = File(sourceDir,"plain-${UUID.randomUUID()}.m4a")
+        val louder = File(sourceDir,"louder-${UUID.randomUUID()}.m4a")
+        try {
+            SegmentStore(File(dir,"pcm"),10).use { store ->
+                store.beginSession(24000,0); store.append(pcm(10))
+                store.snapshot(10).use { snapshot ->
+                    val before = snapshot.slices.associate { it.file to it.file.readBytes() }
+                    AacExporter().encode(snapshot,plain,64000,gainDb = 0)
+                    AacExporter().encode(snapshot,louder,64000,gainDb = 6)
+                    before.forEach { (file,bytes) -> assertArrayEquals(bytes,file.readBytes()) }
+                }
+            }
+            fun decodedEnergy(file: File,output: File): Double {
+                val uri = FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+                AudioEditor(context).decode(uri,AudioEdit(1_000_000,8_000_000,0),output).use {
+                    val b = ByteBuffer.wrap(output.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+                    var sum = 0.0
+                    while (b.remaining() >= 2) { val s = b.short.toDouble(); sum += s*s }
+                    return sum
+                }
+            }
+            val ratio = kotlin.math.sqrt(decodedEnergy(louder,File(dir,"louder.pcm"))/decodedEnergy(plain,File(dir,"plain.pcm")))
+            assertTrue("Decoded gain ratio: $ratio",ratio in 1.95..2.05)
+            assertAudio(louder,10)
+        } finally { plain.delete(); louder.delete(); dir.deleteRecursively() }
+    }
     @Test fun upgradingLegacyNamesPreservesCustomNamesAndMetadata() = runBlocking {
         val dir=folder(); val database=Room.inMemoryDatabaseBuilder(context,RecordingDatabase::class.java).build()
         val repo=RecordingsRepository(context,database.recordings())
