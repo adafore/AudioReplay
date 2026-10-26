@@ -2,11 +2,11 @@
 
 Uložte zvuk, který už zazněl. Nativní aplikace pro Android s průběžným diskovým bufferem, rychlým uložením posledních minut a úpravami nahrávek. České rozhraní, světlý i tmavý motiv, bez cloudu a bez oprávnění k internetu.
 
-**[Stáhnout nejnovější APK zdarma](https://github.com/adafore/AudioReplay/releases/latest)** · [Změny ve verzi 1.2.0](CHANGELOG.md) · [Výsledky testů](TESTOVANI.md)
+**[Stáhnout nejnovější APK zdarma](https://github.com/adafore/AudioReplay/releases/latest)** · [Změny ve verzi 1.3.0](CHANGELOG.md) · [Výsledky testů](TESTOVANI.md)
 
 ## Instalace do telefonu
 
-1. V telefonu otevřete odkaz na nejnovější vydání a v části **Assets** stáhněte soubor `AudioReplay-1.2.0.apk`.
+1. V telefonu otevřete odkaz na nejnovější vydání a v části **Assets** stáhněte soubor `AudioReplay-1.3.0.apk`.
 2. Otevřete stažený soubor. Pokud Android požádá o povolení instalace z prohlížeče nebo správce souborů, potvrďte je pro tuto instalaci.
 3. Otevřete AudioReplay, projděte úvod a klepněte na **Spustit**. Pro záznam povolte mikrofon. Oznámení jsou volitelná.
 
@@ -19,10 +19,23 @@ Podporován je Android 10 a novější. Obchod Google Play ani placený účet n
 - **Pozastavit** vypne mikrofon a zachová dosavadní historii pro uložení. Pokračování začne novou souvislou historii. **Zastavit** zruší dočasný buffer, dokončené nahrávky ponechá a již zadané ukládání dokončí.
 - **Automatické navázání po výpadku:** při dočasném zabrání mikrofonu hovorem či jinou aplikací přejde záznam do stavu **Čekám na mikrofon**. Po uvolnění automaticky naváže na dosavadní buffer. Při chybě zvukového vstupu kontroluje jeho dostupnost každé 2 sekundy a podle potřeby znovu otevře AudioRecord ve stejném formátu. Ztlumený stream ponechává Androidu k automatickému obnovení, nepřetahuje se s druhou aplikací opakovaným spouštěním. Ruční Pozastavit/Zastavit čekání zruší. Při odebraném oprávnění nebo chybě úložiště je potřeba zásah uživatele.
 - Během výpadku se nezapisuje náhradní ticho. Předchozí a následující zachycený zvuk se v uloženém úseku spojí; chybějící dobu nelze zpětně obnovit. Počet přerušení a upozornění jsou na obrazovce Záznam. Dostupná historie udává délku skutečně zachyceného zvuku.
-- **Hlasitost ukládaného zvuku** na obrazovce Záznam i v Nastavení nastavuje zesílení 0–18 dB pro další uložení, včetně právě dostupného bufferu. Začněte například +6 dB. Zesílení se provede při exportu; původní PCM v bufferu se nemění. Výchozí 0 dB ponechává původní hlasitost. Pro starší soubory použijte **Historie → Zesílit nahrávku** a uložte hlasitější kopii; originál zůstane zachovaný. Nastavení nových ukládání se na editované kopie nepřičítá podruhé.
+- Nová uložení mají automatické zesílení **až +12 dB** (přibližně 4× amplituda). Před exportem se změří špičky celého vybraného úseku; pokud by zesílení přebudilo PCM, sníží se s rezervou pro AAC. Původní buffer se nemění. Zesílení zvedne také šum a nedokáže opravit zkreslení již zachycené mikrofonem. Volba hlasitosti ze Záznamu i Nastavení byla odstraněna a stará hodnota z verze 1.2.0 se nepoužívá.
+- Další ruční zesílení je v **Historii**, přes ikonu reproduktoru vpravo u názvu (nad košem). Uloží hlasitější kopii 0–18 dB, originál zachová. Ořez se zesílením zůstává také v Historii. Výchozí zesílení nových uložení se k editované kopii znovu nepřičítá.
 - Nahrávky se jmenují jen datem dne, například `16.10.2026.m4a`, další `16.10.2026 2.m4a`. Staré automatické názvy z verze 1.0.0 se převedou; vlastní názvy aplikace nemění.
 - V **Historii** lze přehrávat a posouvat zvuk, hledat, řadit, přejmenovat, sdílet a mazat. Tlačítko nůžek otevře **Oříznout a zesílit**: vyberte časový úsek a zesílení 0–18 dB. Výsledek se uloží jako nová kopie v aktuálně nastavené kvalitě. Vysoké zesílení může zvuk zkreslit; přetečení vzorků je ošetřeno saturací.
 - Tlačítko složky v Historii otevře `Recordings/AudioReplay` (Android 10–11: `Music/AudioReplay`). Pokud existují soukromé nahrávky, nabídne nejprve jejich bezpečné přesunutí do veřejné složky a používání této složky pro další ukládání. Správce souborů nemá přímý přístup do soukromého adresáře aplikace.
+
+## Plánování
+
+Na záložce **Plán** přidejte jednorázový interval s datem nebo týdenní interval s vybranými dny. Každý interval má začátek a konec. Více intervalů ve stejný den přidejte samostatně; například pro každý pátek vytvořte **07:00–12:00** a **12:30–22:00**. Jsou podporované intervaly přes půlnoc. Překrývající se nebo navazující intervaly se spojí bez restartu bufferu. Limit je 64 intervalů.
+
+Po nastavení klepněte v otevřené aplikaci na **Aktivovat plán**. Android 12+ může vyžádat zvláštní přístup **Budíky a připomenutí** pro přesné časy. Je potřeba také oprávnění mikrofonu. Povolená oznámení umožní připomenout novou aktivaci po přerušení služby.
+
+Aktivace spustí foreground službu typu microphone, dokud je aplikace viditelná. Mezi intervaly služba čeká, ale **AudioRecord je zavřený a mikrofon vypnutý**. Nejbližší začátek či konec hlídá jeden přesný AlarmManager alarm; služba při běhu zároveň vyhodnocuje aktuální plán. Časy jsou místní časy telefonu. Při změně času, časového pásma nebo restartu se alarmy přepočítají. Neexistující čas při jarním posunu se posune vpřed, při opakované podzimní hodině se použije první výskyt.
+
+**Konec intervalu jen vypne mikrofon a zachová dostupný buffer pro ruční uložení. Automaticky nic neukládá.** Další spuštění začíná novou historii. Nejde o trvalou nahrávku celého několikahodinového intervalu. Ruční Spustit, Pozastavit nebo Zastavit přebírá ovládání a vypne plán; Zastavit navíc smaže dočasný buffer stejně jako dříve. Při vypnutí posledního aktivního intervalu se plán pozastaví a buffer ponechá.
+
+Pokud Android **úplně ukončí proces** nebo se telefon restartuje, mikrofon se z alarmu skrytě nespouští. Připravené intervaly zůstanou uložené a oznámení nabídne opětovnou aktivaci. Ta vyžaduje klepnutí uživatele. Vynucené zastavení aplikace v nastavení Androidu blokuje její alarmy a oznámení do dalšího otevření. HyperOS může běžící službu omezovat správcem baterie; dlouhý test na fyzickém telefonu není nahrazen testy emulátoru.
 
 ## Widget a oznámení
 

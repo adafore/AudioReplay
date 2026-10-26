@@ -1,51 +1,62 @@
-# AudioReplay 1.2.0 — ověření
+# AudioReplay 1.3.0 — ověření
 
-Datum: **25. 10. 2026**. Skutečně provedené kontroly verze 1.2.0 (versionCode 3).
+Datum: **26. 10. 2026**. Výsledky verze 1.3.0 (versionCode 4).
 
 | Kontrola | Výsledek |
 |---|---|
-| Jednotkové testy `:core:test` | **38/38 prošlo** |
-| Android `:app:connectedDebugAndroidTest` | **22/22 prošlo**, 0 přeskočených |
-| Lint `:app:lintDebug` | **0 chyb**, 47 upozornění |
+| Jednotkové testy `:core:test` | **55/55 prošlo** |
+| Android `:app:connectedDebugAndroidTest` | **27/27 prošlo**, 0 přeskočených |
+| Lint `:app:lintDebug` | **0 chyb**, 49 upozornění |
 | `:app:assembleRelease` | **BUILD SUCCESSFUL**, optimalizované APK bez ladění |
-| Podpis APK | Ověřen nástrojem apksigner; shodný s předchozími vydáními |
-| Fyzický telefon Android 16 / API 36 | Aktualizace přes předchozí instalaci úspěšná, ověřeno versionCode 3 a spuštění aplikace |
+| Podpis APK | Ověřen apksignerem, shodný s předchozími vydáními |
+| Fyzický telefon | **Neinstalováno** — uživatel požádal jen o vydání na GitHubu |
 
-Android testy běžely na AOSP emulátoru Android 15 / API 35, x86_64, profil Pixel 6, WHPX. Používají skutečné AudioRecord, MediaCodec, MediaExtractor a MediaMuxer. Vstup emulátoru nenahrazuje fyzický mikrofon.
+Android testy běžely na AOSP emulátoru Android 15 / API 35, x86_64, profil Pixel 6, WHPX. Používají skutečné AudioRecord, MediaCodec, MediaExtractor a MediaMuxer. Testovací mikrofon emulátoru nenahrazuje fyzický mikrofon telefonu.
 
-## Nově ověřeno ve verzi 1.2.0
+## Plánování
 
-- **Skutečné opakované převzetí mikrofonu jinou aplikací:** testovací APK se samostatným UID a zdrojem VOICE_COMMUNICATION dvakrát převzalo mikrofon běžící službě AudioReplay. Vždy se objevil stav WAITING, ztlumené PCM nepřibývalo a po zavření druhé aplikace se záznam automaticky obnovil se stejným ID bufferové relace. Testovací aktivita není součástí distribuovaného APK.
-- Čtyři integrační testy s řízeným vstupem simulují opakovanou chybu ovladače, obsazení vstupu, pozdní události z předchozího vstupu a trvalou chybu. Ověřují kontrolu obsazení před dalším spuštěním, zachování bufferu i formátu, ukládání během čekání a zrušení pokusů po ruční pauze či Stop. Tyto řízené chyby nejsou vydávány za fyzické poruchy zařízení.
-- Jednotkové testy ověřují pokračování stejné relace přes více přerušení, rotaci bufferu a zachování rezervovaných exportů. Změna PCM formátu při navázání se odmítne bez ztráty existujícího zvuku.
-- **Hlasitost výsledného M4A:** skutečný AAC export se zesílením +6 dB byl znovu dekódován a porovnán s exportem bez zesílení. Poměr amplitudy byl přibližně 2×; původní PCM soubory zůstaly bitově stejné.
-- Zesílení kladných i záporných PCM16 vzorků, saturace bez přetečení, bitově shodný průchod při 0 dB, nezměněný konec částečného bloku a normalizace nastavení 0–18 dB.
+- Šestnáct jednotkových scénářů ověřuje páteční intervaly 07:00–12:00 a 12:30–22:00, mezeru mezi nimi, opakování další týden, více dnů, jednorázové datum, půlnoc včetně přechodu týdne, překryvy, sousedící intervaly, vypnuté intervaly, neplatné vstupy, změnu časového pásma a oba přechody letního času v Europe/Prague.
+- **Dva skutečné mikrofonní intervaly na pozadí:** plán byl aktivován z viditelné aktivity, poté aktivita přešla do stavu CREATED. Služba zpočátku čekala bez PCM, první interval sám otevřel mikrofon, konec jej zastavil a zachoval buffer. Buffer šel v mezeře ručně uložit. Druhý interval vytvořil novou historii a znovu se ukončil bez smazání bufferu.
+- Ruční Stop před budoucím startem vypnul plán a zabránil dalšímu spuštění. Připravené pravidlo zůstalo uložené.
+- Pokud foreground služba neběží, obslužný receiver pouze zobrazil oznámení pro aktivaci; mikrofon se na pozadí sám nespustil.
+- Uložení a opětovné načtení jednorázového i týdenního pravidla, úprava jednoho pravidla bez změny druhého a odebrání pravidla.
+
+## Hlasitost a úpravy
+
+Nová uložení používají pevné zesílení až +12 dB s kontrolou špiček celého vybraného úseku a rezervou před AAC. U hlasitého vstupu se zesílení sníží. Jednotkové testy ověřují požadovaný faktor u slabého vstupu, omezení u hlasitého PCM a saturaci ručně zvoleného zesílení. Android test **defaultGainCapsHotInputBeforeAacEncoding** exportoval hlasitější vstup do AAC, znovu jej dekódoval a ověřil zesílení odpovídající omezenému faktoru i absenci digitálních špiček na plném rozsahu. Původní buffer se při exportu nemění.
+
+Zachované testy ověřují ořez se vzorkovou přesností, ruční zesílení +6 dB s přibližně dvojnásobnou amplitudou a nezměněný originál. Další automatické zesílení se k upravované kopii nepřičítá. Ovládání hlasitosti ze Záznamu a Nastavení bylo odstraněno; ruční ovládání zůstává v Historii.
 
 ## Zachované kontroly
 
-Validace délek, dvojí stisk, rotace a zkrácení diskového bufferu, překrývající se snapshoty a Stop během exportu, AAC/M4A a časové značky, simulovaný nedostatek místa, chyba enkodéru, soukromé i veřejné ukládání, přejmenování/mazání, obnova publikace po simulovaném pádu, denní názvy a migrace, přesný ořez a zesílení se zachováním originálu, přesun do veřejné složky, widgetové layouty a adaptivní ikona. Integrační test skutečné mikrofonní služby ověřuje Uložit/Pozastavit přes PendingIntenty oznámení, ruční pokračování a Stop. Samostatný editor nespouští mikrofon.
+Rotace a zkrácení diskového bufferu, souběžné snapshoty, Stop během exportu, validace délek a dvojí stisk, skutečný AAC/M4A a časové značky, simulované chyby enkodéru a místa, soukromé/veřejné ukládání, přejmenování/mazání, obnova publikace po pádu, denní názvy a migrace, přesun do veřejné složky, widgetové layouty a ikona. Mikrofonní služba má integrační test ukládání, pozastavení a Stop přes PendingIntenty oznámení; samostatný editor nespouští mikrofon.
 
-## Výsledné APK a meze ověření
+Opakované skutečné převzetí mikrofonu testovacím APK se samostatným UID ověřuje automatické pokračování ve stejné historii. Řízené simulace ověřují chybu ovladače, obsazení vstupu, zachování PCM formátu, pozdní události původního vstupu, ruční zrušení pokusů a trvalou chybu. Testovací aktivita se samostatným UID není v distribuovaném APK.
 
-Výsledný release byl nainstalován přes původní aplikaci na připojeném fyzickém telefonu a otevřen. Uložené soubory se při aktualizaci nemažou, databázové schéma zůstalo kompatibilní. Soukromé nahrávky ani místní zálohy nejsou ve veřejném repozitáři či balíčcích.
+## Omezení
 
-Dosud neproběhl dlouhý 45minutový test nového vydání na fyzickém Xiaomi se zhasnutým displejem, měření baterie, skutečný telefonní hovor nebo změny externího audio vstupu. Chování HyperOS a jeho správce baterie se může lišit od AOSP. Automatické navázání vyžaduje, aby uživatelem spuštěná foreground služba dál běžela a aplikace měla oprávnění mikrofonu. Po ukončení celého procesu či restartu telefonu se nahrávání samo nespustí. Chybějící zvuk během přerušení nelze obnovit; ve výsledku se vynechá a v aplikaci je uveden počet přerušení.
+Telefon nebyl pro toto vydání k dispozici a verze 1.3.0 na něm nebyla nainstalována. Dosud neproběhl dlouhý test plánu na HyperOS se zhasnutým displejem, skutečný hovor, měření baterie nebo změny externího vstupu. Na emulátoru byly intervaly záměrně zkrácené na sekundy; testy netvrdí, že proběhlo několikahodinové nahrávání.
 
-Upozornění Lintu nejsou potlačena baseline souborem. Nezablokující doporučení zahrnují například novější závislosti, KSP místo kapt, překladové zdroje, KTX a analýzu wake locku. Syrové sestavovací logy s místními cestami se nezveřejňují.
+Plán se aktivuje uživatelem z otevřené aplikace s oprávněním mikrofonu a na Androidu 12+ i přesnými budíky. Mezi intervaly zůstává aktivní foreground služba, nikoli AudioRecord. Po úplném ukončení procesu nebo restartu telefonu je potřeba plán znovu aktivovat. Alarm ani boot receiver mikrofon skrytě nespouští; oznámení umožní aktivaci klepnutím uživatele. Při zakázaných oznámeních připomenutí vidět nebude. Vynucené zastavení aplikace v Androidu blokuje alarmy do dalšího otevření.
 
-## Opakování testů
+Konec intervalu jen vypne mikrofon a ponechá dostupný buffer; automaticky neukládá celý interval. Další spuštění začne novou historii. Při přerušení mikrofonu zvuk z chybějící doby nelze obnovit. Zesílení zvedá i šum a neopraví zkreslení již zachycené mikrofonem.
+
+Lint nemá baseline. Upozornění zahrnují například novější závislosti, KSP místo kapt, překladové zdroje a analýzu wake locku. Syrové logy s místními cestami, soukromá média a podpisový klíč se nezveřejňují.
+
+## Opakování
 
 ```powershell
 .\gradlew.bat :core:test :app:connectedDebugAndroidTest :app:lintDebug :app:assembleRelease
 ```
 
-Instrumentační testy spouštějte pouze na emulátoru nebo vyhrazeném testovacím zařízení: pracují s testovacími daty aplikace a při testu přerušení otevírají mikrofon testovacího APK.
+Instrumentační testy používejte na emulátoru nebo vyhrazeném testovacím zařízení. Pracují s daty testovací aplikace, udělují jí oprávnění mikrofonu/oznámení a pro plánovací testy povolují přesné alarmy pomocí shellového appops.
 
 ## Jednotkové testy
 
-- `RecordingGainTest.oldSettingsDefaultToNoGainAndInvalidSettingsAreClamped` — prošel
+- `RecordingGainTest.fixedDefaultIsTwelveDecibelsAndQuietInputKeepsRequestedGain` — prošel
 - `RecordingGainTest.sixDecibelsAmplifiesBothSignsAndClipsWithoutWrapping` — prošel
 - `RecordingGainTest.zeroGainIsBitExactAndPartialReadDoesNotTouchTail` — prošel
+- `RecordingGainTest.hotInputReducesGainWithHeadroomInsteadOfClipping` — prošel
 - `ReplaySettingsTest.changeSaveToTwentyMinutesWithoutChangingBuffer` — prošel
 - `ReplaySettingsTest.confirmationExpiresAndUsesMonotonicOrder` — prošel
 - `ReplaySettingsTest.durationsRespectCurrentBuffer` — prošel
@@ -57,6 +68,22 @@ Instrumentační testy spouštějte pouze na emulátoru nebo vyhrazeném testova
 - `ReplaySettingsTest.unitConversion` — prošel
 - `ReplaySettingsTest.defaultsKeepIndependentLengths` — prošel
 - `ReplaySettingsTest.invalidPersistedSettingsAreClamped` — prošel
+- `ScheduleClockTest.sundayNightCanRunOnMonday` — prošel
+- `ScheduleClockTest.fridayStartsAtSeven` — prošel
+- `ScheduleClockTest.afternoonEndsAtTwentyTwo` — prošel
+- `ScheduleClockTest.weeklyRepeatUsesNextFriday` — prošel
+- `ScheduleClockTest.timezoneChangeKeepsLocalClockTime` — prošel
+- `ScheduleClockTest.disabledIntervalsAreIgnored` — prošel
+- `ScheduleClockTest.touchingRulesDoNotStopAtTheirBoundary` — prošel
+- `ScheduleClockTest.oneTimeDateRunsOnlyOnce` — prošel
+- `ScheduleClockTest.invalidAndDuplicateRulesAreRejected` — prošel
+- `ScheduleClockTest.overnightExtendsIntoNextDay` — prošel
+- `ScheduleClockTest.overlappingRulesFormOneContinuousWindow` — prošel
+- `ScheduleClockTest.multipleWeekdaysChooseNearestLocalDay` — prošel
+- `ScheduleClockTest.lunchGapStopsAndHasNextStart` — prošel
+- `ScheduleClockTest.springClockGapMovesNonexistentTimeForward` — prošel
+- `ScheduleClockTest.disabledPlanHasNoWakeup` — prošel
+- `ScheduleClockTest.autumnRepeatedHourUsesFirstOccurrenceAndRealEnd` — prošel
 - `SegmentStoreTest.repeatedRecoveriesStillRespectRetentionAndPinnedExports` — prošel
 - `SegmentStoreTest.pauseResumeStartsDistinctSession` — prošel
 - `SegmentStoreTest.rotationKeepsExactTenSeconds` — prošel
@@ -93,6 +120,7 @@ Instrumentační testy spouštějte pouze na emulátoru nebo vyhrazeném testova
 - `AudioPipelineTest.interruptedPublicationIsDiscardedDuringRecovery` — prošel
 - `AudioPipelineTest.completedFileIsRecoveredAfterProcessDeathBeforeDatabaseInsert` — prošel
 - `AudioPipelineTest.exportGainMakesDecodedRecordingLouderWithoutChangingBuffer` — prošel
+- `AudioPipelineTest.defaultGainCapsHotInputBeforeAacEncoding` — prošel
 - `AudioPipelineTest.overlappingExportsSurviveStop` — prošel
 - `AudioPipelineTest.movingPrivateRecordingToPublicFolderPreservesIdAndAudio` — prošel
 - `AudioPipelineTest.realAacEncoderProducesValidM4a` — prošel
@@ -104,5 +132,9 @@ Instrumentační testy spouštějte pouze na emulátoru nebo vyhrazeném testova
 - `RecordingServiceTest.anotherAppCanUseMicrophoneTwiceAndRecordingAutomaticallyContinues` — prošel
 - `RecordingServiceTest.standaloneEditServicePublishesCopyWithoutStartingMicrophone` — prošel
 - `RecordingServiceTest.realMicrophoneSavePauseResumeAndStop` — prošel
+- `ScheduleServiceTest.stopCancelsFutureScheduledStart` — prošel
+- `ScheduleServiceTest.weeklyAndOneTimeRulesPersistAndCanBeEditedWithoutChangingOthers` — prošel
+- `ScheduleServiceTest.twoBackgroundIntervalsStartStopAndKeepBufferForManualSave` — prošel
+- `ScheduleServiceTest.absentServiceGetsActivationNotificationInsteadOfBackgroundMicrophone` — prošel
 - `WidgetTest.adaptiveIconHasGreenBackgroundWithoutWhitePlate` — prošel
 - `WidgetTest.allWidgetSizesInflateWithExpectedControls` — prošel

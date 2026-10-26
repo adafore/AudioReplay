@@ -6,11 +6,26 @@ import cz.audioreplay.core.PcmGain
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import kotlin.math.pow
 
 /** Encodes one exact PCM snapshot into a single AAC track; capture never waits for this. */
 class AacExporter {
-    fun encode(snapshot: SegmentStore.Snapshot, target: File, bitrate: Int, gainDb: Int = 0, onProgress: (Float) -> Unit = {}, checkActive: () -> Unit = {}) {
+    fun encode(snapshot: SegmentStore.Snapshot, target: File, bitrate: Int, gainDb: Int = 0, preventClipping: Boolean = false, onProgress: (Float) -> Unit = {}, checkActive: () -> Unit = {}) {
         require(gainDb in 0..18)
+        var peak = 0
+        if (preventClipping) PcmReader(snapshot.slices).use { reader ->
+            val bytes = ByteArray(16384)
+            while (true) {
+                checkActive()
+                val count = reader.read(bytes,bytes.size)
+                if (count == 0) break
+                for (i in 0 until count step 2) {
+                    val sample = (((bytes[i+1].toInt() and 255) shl 8) or (bytes[i].toInt() and 255)).toShort().toInt()
+                    peak = maxOf(peak,kotlin.math.abs(sample))
+                }
+            }
+        }
+        val factor = if (preventClipping) PcmGain.safeFactor(peak,gainDb) else 10.0.pow(gainDb/20.0)
         target.parentFile?.mkdirs()
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
         var muxer: MediaMuxer? = null
@@ -43,7 +58,7 @@ class AacExporter {
                             val buffer = requireNotNull(codec.getInputBuffer(index))
                             buffer.clear()
                             val count = reader.read(scratch, minOf(buffer.remaining(), scratch.size) / 2 * 2)
-                            PcmGain.applyInPlace(scratch, count, gainDb)
+                            PcmGain.applyFactorInPlace(scratch, count, factor)
                             buffer.put(scratch, 0, count)
                             codec.queueInputBuffer(index, 0, count, fedFrames * 1_000_000L / snapshot.sampleRate,
                                 if (count == 0) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0)

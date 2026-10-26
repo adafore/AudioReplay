@@ -249,6 +249,35 @@ class AudioPipelineTest {
             assertAudio(louder,10)
         } finally { plain.delete(); louder.delete(); dir.deleteRecursively() }
     }
+    @Test fun defaultGainCapsHotInputBeforeAacEncoding() {
+        val dir = folder()
+        val sourceDir = File(context.filesDir,"recordings").also { it.mkdirs() }
+        val original = File(sourceDir,"peak-original-${UUID.randomUUID()}.m4a")
+        val amplified = File(sourceDir,"peak-amplified-${UUID.randomUUID()}.m4a")
+        try {
+            SegmentStore(File(dir,"pcm"),10).use { store ->
+                store.beginSession(24000,0); store.append(pcm(3))
+                store.snapshot(3).use { snapshot ->
+                    AacExporter().encode(snapshot,original,64000)
+                    AacExporter().encode(snapshot,amplified,64000,gainDb = cz.audioreplay.core.PcmGain.DEFAULT_DB,preventClipping = true)
+                }
+            }
+            fun measure(file: File): Pair<Double,Int> {
+                val uri = FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+                val target = File(dir,"${file.name}.pcm")
+                AudioEditor(context).decode(uri,AudioEdit(500000,2500000,0),target).use {
+                    val buffer = ByteBuffer.wrap(target.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+                    var sum = 0.0; var peak = 0
+                    while (buffer.remaining()>=2) { val sample = buffer.short.toInt(); sum += sample.toDouble()*sample; peak = maxOf(peak,abs(sample)) }
+                    return sum to peak
+                }
+            }
+            val plain = measure(original); val louder = measure(amplified)
+            val ratio = kotlin.math.sqrt(louder.first/plain.first)
+            assertTrue("Peak-limited ratio $ratio",ratio in 2.85..3.05)
+            assertTrue("AAC decoded peak ${louder.second}",louder.second<32760)
+        } finally { original.delete(); amplified.delete(); dir.deleteRecursively() }
+    }
     @Test fun upgradingLegacyNamesPreservesCustomNamesAndMetadata() = runBlocking {
         val dir=folder(); val database=Room.inMemoryDatabaseBuilder(context,RecordingDatabase::class.java).build()
         val repo=RecordingsRepository(context,database.recordings())

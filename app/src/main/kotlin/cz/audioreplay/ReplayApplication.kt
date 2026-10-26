@@ -9,12 +9,14 @@ import cz.audioreplay.audio.CaptureDriver
 import cz.audioreplay.service.RecordingNotice
 import cz.audioreplay.core.ReplaySettings
 import cz.audioreplay.core.SegmentStore
+import cz.audioreplay.core.ScheduleConfig
+import cz.audioreplay.service.ScheduleAlarms
 import cz.audioreplay.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 
-enum class CaptureStatus { IDLE, STARTING, RECORDING, WAITING, PAUSED, ERROR }
+enum class CaptureStatus { IDLE, STARTING, RECORDING, WAITING, PLANNED, PAUSED, ERROR }
 data class ReplayState(
     val status: CaptureStatus = CaptureStatus.IDLE,
     val availableSeconds: Double = 0.0,
@@ -27,6 +29,8 @@ data class ReplayState(
     val editProgress: Float? = null,
     val editingName: String? = null,
     val interruptionCount: Int = 0,
+    val planArmed: Boolean = false,
+    val nextPlanChangeMs: Long? = null,
 )
 class ReplayApplication : Application() {
     lateinit var graph: AppGraph; private set
@@ -39,6 +43,9 @@ class AppGraph(val app: Application) {
     val settings = settingsRepository.flow.stateIn(scope, SharingStarted.Eagerly, ReplaySettings())
     val settingsReady = CompletableDeferred<Unit>()
     val mediaReady = CompletableDeferred<Unit>()
+    val scheduleRepository = ScheduleRepository(app)
+    val schedules = MutableStateFlow(ScheduleConfig())
+    val scheduleReady = CompletableDeferred<Unit>()
     val store = SegmentStore(File(app.cacheDir, "pcm").also { SegmentStore.discardStale(it) })
     val database = Room.databaseBuilder(app, RecordingDatabase::class.java, "recordings.db").build()
     val recordings = RecordingsRepository(app, database.recordings())
@@ -48,6 +55,10 @@ class AppGraph(val app: Application) {
     init {
         RecordingNotice.ensure(app)
         scope.launch { settingsRepository.flow.first(); settingsReady.complete(Unit) }
+        scope.launch { scheduleRepository.flow.collect { config ->
+            schedules.value = config; scheduleReady.complete(Unit)
+            runCatching { ScheduleAlarms.refresh(app,config) }.onFailure { message("Přesné časy plánu nejsou dostupné: ${it.localizedMessage}") }
+        } }
         scope.launch(Dispatchers.IO) { runCatching { recordings.recover(); recordings.compactLegacyNames() }.onFailure { error ->
             state.update { it.copy(message = "Obnova historie: ${error.localizedMessage}") }
         }; mediaReady.complete(Unit) }

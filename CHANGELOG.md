@@ -1,5 +1,14 @@
 # Změny
 
+## 1.3.0 — 26. 10. 2026
+
+- Jednorázové a týdenní plánování s více intervaly denně, přes půlnoc, přepočtem místních časů a slučováním překryvů.
+- Aktivace plánu z otevřené aplikace; přesné alarmy pro nejbližší změnu a připomenutí opětovné aktivace po ukončení služby nebo restartu telefonu.
+- Na konci intervalu se mikrofon vypne a buffer zůstane pro ruční uložení do dalšího spuštění. Žádné automatické ukládání celého intervalu.
+- Odstraněná volba hlasitosti ze Záznamu i Nastavení. Nová uložení mají zesílení až +12 dB s měřením špiček a automatickým snížením při riziku přebuzení.
+- Zesílení v Historii je ikona reproduktoru vpravo u názvu nad košem, bez dalšího textového tlačítka.
+- Ruční ovládání vypíná aktivní plán, připravené intervaly zůstávají uložené.
+
 ## 1.2.0 — 25. 10. 2026
 
 - Automatické čekání na mikrofon při hovoru, obsazení jinou aplikací nebo dočasném výpadku vstupu; po uvolnění naváže na stávající historii.

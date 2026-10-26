@@ -21,7 +21,6 @@ class SettingsRepository(private val context: Context) {
             diagnostics = p[bool("diagnostics")] ?: false, onboardingDone = p[bool("onboarding")] ?: false,
             notificationDetails = p[bool("notification_details")] ?: true,
             notificationActions = p[bool("notification_actions")] ?: true,
-            recordingGainDb = p[int("recording_gain")] ?: 0,
         ).normalized()
     val flow = context.settingsDataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.map(::decode)
     suspend fun update(transform: (ReplaySettings) -> ReplaySettings) {
@@ -33,7 +32,7 @@ class SettingsRepository(private val context: Context) {
             p[bool("private")] = s.privateNotification; p[bool("tile")] = s.tileEnabled; p[bool("widget")] = s.widgetEnabled
             p.remove(bool("hid")); p[bool("diagnostics")] = s.diagnostics; p[bool("onboarding")] = s.onboardingDone
             p[bool("notification_details")] = s.notificationDetails; p[bool("notification_actions")] = s.notificationActions
-            p[int("recording_gain")] = s.recordingGainDb
+            p.remove(int("recording_gain"))
         }
     }
 }

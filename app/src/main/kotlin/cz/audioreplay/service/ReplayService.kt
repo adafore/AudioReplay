@@ -17,12 +17,17 @@ import cz.audioreplay.core.Durations
 import cz.audioreplay.core.PressGate
 import cz.audioreplay.core.AudioEdit
 import cz.audioreplay.core.SegmentStore
+import cz.audioreplay.core.PcmGain
+import cz.audioreplay.core.ScheduleClock
+import cz.audioreplay.core.ScheduleConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
+import java.time.Instant
+import java.time.ZoneId
 
 class ReplayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -40,6 +45,7 @@ class ReplayService : Service() {
     private var sessionRate: Int? = null
     private var captureGeneration = 0L
     private var recoveryJob: Job? = null
+    private var planArmed = false
 
     override fun onCreate() {
         super.onCreate(); instance = this
@@ -59,7 +65,16 @@ class ReplayService : Service() {
             }
         }
         scope.launch {
+            g.schedules.collect { config -> if (planArmed) controls.withLock {
+                if (config.enabled) evaluatePlan(config) else {
+                    planArmed = false; g.state.update { it.copy(planArmed = false,nextPlanChangeMs = null) }
+                    stopCapture(CaptureStatus.PAUSED,"Plán vypnutý. Buffer zůstává pro ruční uložení.",false)
+                }
+            } }
+        }
+        scope.launch {
             while (isActive) {
+                if (planArmed) controls.withLock { if (planArmed) evaluatePlan(g.schedules.value) }
                 g.state.update { it.copy(availableSeconds = g.store.availableSeconds(), cacheBytes = g.store.cacheBytes()) }
                 if (foreground) updateNotification()
                 delay(1000)
@@ -77,7 +92,7 @@ class ReplayService : Service() {
             }
             return START_NOT_STICKY
         }
-        if (intent?.action != START) { if (!foreground) stopSelf(); return START_NOT_STICKY }
+        if (intent == null || intent.action !in setOf(START,ARM_SCHEDULE)) { if (!foreground) stopSelf(); return START_NOT_STICKY }
         try {
             captureSession = true
             startForeground(NOTIFICATION, notification(), microphoneType())
@@ -87,26 +102,64 @@ class ReplayService : Service() {
             stopSelf(); return START_NOT_STICKY
         }
         scope.launch { controls.withLock {
-            if (captureWanted) return@withLock
             stopping = false
             g.settingsReady.await()
             if (intent.getStringExtra("source") == "widget" && !g.settings.value.widgetEnabled) {
                 if (g.state.value.status == CaptureStatus.IDLE && g.state.value.pendingExports == 0) stopSelf()
                 return@withLock
             }
-            sessionRate = null
-            captureWanted = true
-            g.state.update { it.copy(status = CaptureStatus.STARTING, message = null, interruptionCount = 0) }
-            recoveryJob?.cancel()
-            recoveryJob = scope.launch {
-                while (isActive && captureWanted) {
-                    controls.withLock { if (captureWanted && !captureOpen) tryCapture() }
-                    delay(2000)
+            if (intent.action == ARM_SCHEDULE) {
+                try {
+                    g.scheduleReady.await()
+                    check(g.schedules.value.rules.any { it.enabled }) { "Nejprve přidejte alespoň jeden zapnutý interval." }
+                    check(ScheduleAlarms.canSchedule(this@ReplayService)) { "Povolte v Androidu přesné budíky a připomenutí." }
+                    planArmed = true
+                    g.state.update { it.copy(planArmed = true) }
+                    g.scheduleRepository.setEnabled(true)
+                    evaluatePlan(g.schedules.value.copy(enabled = true))
+                    ScheduleAlarms.clearNotice(this@ReplayService)
+                } catch (e: Exception) {
+                    disarmPlan()
+                    g.message("Plán nelze aktivovat: ${e.localizedMessage}")
+                    if (!captureWanted && g.store.availableFrames() == 0L) stopSelf()
                 }
+            } else {
+                disarmPlan().join()
+                if (!captureWanted) beginCaptureRequest()
             }
             updateNotification()
         } }
         return START_NOT_STICKY
+    }
+
+    private fun beginCaptureRequest() {
+        sessionRate = null; captureWanted = true
+        g.state.update { it.copy(status = CaptureStatus.STARTING,message = null,interruptionCount = 0) }
+        recoveryJob?.cancel()
+        recoveryJob = scope.launch {
+            while (isActive && captureWanted) {
+                controls.withLock { if (captureWanted && !captureOpen) tryCapture() }
+                delay(2000)
+            }
+        }
+    }
+    private fun disarmPlan(): Job {
+        planArmed = false
+        g.state.update { it.copy(planArmed = false,nextPlanChangeMs = null) }
+        return g.scope.launch { g.scheduleRepository.setEnabled(false) }
+    }
+    fun onScheduledAlarm() { scope.launch { controls.withLock { if (planArmed) evaluatePlan(g.schedules.value) } } }
+    private suspend fun evaluatePlan(config: ScheduleConfig) {
+        val decision = ScheduleClock.evaluate(config,Instant.now(),ZoneId.systemDefault())
+        ScheduleAlarms.refresh(this,config)
+        g.state.update { it.copy(nextPlanChangeMs = decision.nextChange?.toEpochMilli()) }
+        if (decision.record) {
+            if (!captureWanted) beginCaptureRequest()
+        } else if (captureWanted || captureOpen) {
+            stopCapture(CaptureStatus.PLANNED,"Interval skončil. Mikrofon je vypnutý; buffer zůstává pro ruční uložení do dalšího spuštění.",false)
+        } else if (g.state.value.status != CaptureStatus.PLANNED) {
+            g.state.update { it.copy(status = CaptureStatus.PLANNED,message = "Plán je aktivní. Mikrofon je do dalšího intervalu vypnutý.") }
+        }
     }
 
     /** Runs only in the already user-started microphone foreground service. */
@@ -155,6 +208,7 @@ class ReplayService : Service() {
         if (failure.recoverable) waiting(failure.message + " Automaticky zkusím pokračovat po uvolnění mikrofonu.")
         else {
             captureWanted = false
+            if (planArmed) disarmPlan()
             g.state.update { it.copy(status = CaptureStatus.ERROR, message = failure.message) }
         }
         updateNotification()
@@ -163,14 +217,16 @@ class ReplayService : Service() {
     fun command(action: String, source: String = "notification", seconds: Int? = null) {
         when (action) {
             SAVE -> save(source, seconds)
-            PAUSE -> { captureWanted = false; scope.launch { controls.withLock {
-                if (g.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING)) stopCapture(CaptureStatus.PAUSED,
+            PAUSE -> { captureWanted = false; val disarmed = disarmPlan(); scope.launch { controls.withLock {
+                disarmed.join()
+                if (g.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.PLANNED, CaptureStatus.STARTING)) stopCapture(CaptureStatus.PAUSED,
                     "Pozastaveno. Po pokračování začne nová historie; pauza nebude spojena do souvislého záznamu.", false)
                 updateNotification()
             } } }
             STOP -> {
-                stopping = true; captureWanted = false
+                stopping = true; captureWanted = false; val disarmed = disarmPlan()
                 scope.launch { controls.withLock {
+                    disarmed.join()
                     stopCapture(CaptureStatus.IDLE, "Záznam zastaven. Dočasný buffer byl uvolněn.", true)
                     captureSession = false
                     if (g.state.value.pendingExports == 0) stopSelf() else updateNotification()
@@ -188,7 +244,7 @@ class ReplayService : Service() {
     }
     private fun save(source: String, seconds: Int? = null) {
         if (stopping) { g.message("Záznam se ukončuje."); return }
-        if (g.state.value.status !in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.PAUSED, CaptureStatus.ERROR)) return
+        if (g.state.value.status !in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.PLANNED, CaptureStatus.PAUSED, CaptureStatus.ERROR)) return
         val settings = g.settings.value
         if (!gate.accept(source, SystemClock.elapsedRealtime(), settings.doublePress)) {
             g.message("Pro uložení stiskněte stejné tlačítko ještě jednou do 0,9 s.")
@@ -205,7 +261,7 @@ class ReplayService : Service() {
                     wake.acquire(30 * 60 * 1000L)
                     try {
                         val context = currentCoroutineContext()
-                        withContext(Dispatchers.IO) { g.exporter.encode(snapshot, temp, settings.bitrate, gainDb = settings.recordingGainDb) { context.ensureActive() } }
+                        withContext(Dispatchers.IO) { g.exporter.encode(snapshot, temp, settings.bitrate, gainDb = PcmGain.DEFAULT_DB,preventClipping = true) { context.ensureActive() } }
                         g.mediaReady.await()
                         val saved = g.recordings.publish(temp, snapshot, settings.bitrate, settings.publicStorage)
                         g.state.update { it.copy(lastSaved = saved.name, message = "Uloženo: ${saved.name}") }
@@ -293,18 +349,22 @@ class ReplayService : Service() {
             CaptureStatus.PAUSED -> "AudioReplay · Pozastaveno"
             CaptureStatus.STARTING -> "AudioReplay · Spouštění"
             CaptureStatus.WAITING -> "AudioReplay · Čekám na mikrofon, automaticky navážu"
+            CaptureStatus.PLANNED -> "AudioReplay · Plán aktivní, mikrofon vypnutý"
             CaptureStatus.ERROR -> "AudioReplay · Mikrofon neběží"
             else -> if (state.editingName != null) "AudioReplay · Upravuji nahrávku" else if (state.pendingExports > 0) "AudioReplay · Dokončuji export" else "AudioReplay · Zastaveno"
         }
         val builder = NotificationCompat.Builder(this, RecordingNotice.CHANNEL).setSmallIcon(R.drawable.ic_replay)
-            .setContentTitle(title).setContentText(if(g.settings.value.notificationDetails) "Historie ${state.availableSeconds.toInt()} s · Úlohy ${state.pendingExports}" else "Klepnutím otevřete AudioReplay")
+            .setContentTitle(title).setContentText(if(!g.settings.value.notificationDetails) "Klepnutím otevřete AudioReplay" else if (state.status == CaptureStatus.PLANNED)
+                state.nextPlanChangeMs?.let { "Další spuštění: ${java.text.SimpleDateFormat("EEE d. M. HH:mm",java.util.Locale.getDefault()).format(java.util.Date(it))}" } ?: "Plán dokončen · buffer lze ručně uložit"
+                else "Historie ${state.availableSeconds.toInt()} s · Úlohy ${state.pendingExports}")
             .setContentIntent(openActivity(this)).setOngoing(true).setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setVisibility(if (private) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_PUBLIC)
         if (private) builder.setPublicVersion(NotificationCompat.Builder(this, RecordingNotice.CHANNEL).setSmallIcon(R.drawable.ic_replay).setContentTitle(title).build())
         if (!stopping && captureSession && g.settings.value.notificationActions) {
             builder.addAction(0, "Uložit ${Durations.label(g.settings.value.saveDurationSec)}", controlIntent(this, SAVE, "notification"))
-            if (state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING)) builder.addAction(0, "Pozastavit", controlIntent(this, PAUSE, "notification"))
+            if (planArmed) builder.addAction(0, "Vypnout plán",controlIntent(this,PAUSE,"notification"))
+            else if (state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING, CaptureStatus.STARTING)) builder.addAction(0, "Pozastavit", controlIntent(this, PAUSE, "notification"))
             else builder.addAction(0, "Pokračovat", openActivity(this, resume = true))
         }
         if (captureSession && g.settings.value.notificationActions) builder.addAction(0, "Zastavit", controlIntent(this, STOP, "notification"))
@@ -320,7 +380,7 @@ class ReplayService : Service() {
         scope.cancel()
         runCatching { capture.stop(); g.store.close() }
         g.state.update { it.copy(status = if (it.status == CaptureStatus.ERROR) CaptureStatus.ERROR else CaptureStatus.IDLE,
-            serviceRunning = false, availableSeconds = 0.0) }
+            serviceRunning = false, availableSeconds = 0.0,planArmed = false,nextPlanChangeMs = null) }
         stopForeground(STOP_FOREGROUND_REMOVE)
         updateControls(this)
         super.onDestroy()
@@ -332,6 +392,7 @@ class ReplayService : Service() {
         const val PAUSE = "cz.audioreplay.PAUSE"
         const val STOP = "cz.audioreplay.STOP"
         const val EDIT = "cz.audioreplay.EDIT"
+        const val ARM_SCHEDULE = "cz.audioreplay.ARM_SCHEDULE"
         private const val NOTIFICATION = 1
     }
 }

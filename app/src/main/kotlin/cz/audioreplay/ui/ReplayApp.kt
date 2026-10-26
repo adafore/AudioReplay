@@ -41,7 +41,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
 
-@Composable fun ReplayApp(g: AppGraph, start: () -> Unit) {
+@Composable fun ReplayApp(g: AppGraph, start: () -> Unit, armSchedule: () -> Unit) {
     val settings by g.settings.collectAsStateWithLifecycle()
     val state by g.state.collectAsStateWithLifecycle()
     val dark = isSystemInDarkTheme()
@@ -55,9 +55,9 @@ import kotlin.math.roundToInt
         LaunchedEffect(state.message) { state.message?.let { snackbar.showSnackbar(it) } }
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
             if (settings.onboardingDone) NavigationBar {
-                listOf("Záznam", "Historie", "Nastavení").forEachIndexed { index, title ->
+                listOf("Záznam", "Historie", "Plán", "Nastavení").forEachIndexed { index, title ->
                     NavigationBarItem(selected = page == index, onClick = { page = index }, label = { Text(title) },
-                        icon = { Icon(when(index) { 0 -> Icons.Default.Mic; 1 -> Icons.AutoMirrored.Filled.List; else -> Icons.Default.Settings }, title) })
+                        icon = { Icon(when(index) { 0 -> Icons.Default.Mic; 1 -> Icons.AutoMirrored.Filled.List; 2 -> Icons.Default.Event; else -> Icons.Default.Settings }, title) })
                 }
             }
         }) { padding ->
@@ -66,6 +66,7 @@ import kotlin.math.roundToInt
                 else when (page) {
                     0 -> Dashboard(g, state, settings, start)
                     1 -> History(g)
+                    2 -> SchedulePane(g,armSchedule)
                     else -> Preferences(g, settings, state)
                 }
             }
@@ -104,8 +105,7 @@ import kotlin.math.roundToInt
 }
 @Composable private fun Dashboard(g: AppGraph, state: ReplayState, settings: ReplaySettings, start: () -> Unit) {
     val active = state.status == CaptureStatus.RECORDING
-    val canPause = state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING)
-    val scope = rememberCoroutineScope()
+    val canPause = state.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING,CaptureStatus.PLANNED)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Heading("AudioReplay", "Zachyťte okamžik.", "Průběžná paměť pro zvuk kolem vás.")
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(28.dp)) {
@@ -113,7 +113,7 @@ import kotlin.math.roundToInt
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(if (active) Icons.Default.Mic else Icons.Default.MicOff, null)
                     Spacer(Modifier.width(8.dp))
-                    Text(when(state.status) { CaptureStatus.RECORDING -> "Mikrofon nahrává"; CaptureStatus.STARTING -> "Spouštění mikrofonu…"; CaptureStatus.WAITING -> "Čekám na mikrofon · automaticky navážu"; CaptureStatus.PAUSED -> "Pozastaveno · mikrofon vypnutý"; CaptureStatus.ERROR -> "Mikrofon neběží · chyba"; else -> "Připraveno ke spuštění" }, style = MaterialTheme.typography.titleMedium)
+                    Text(when(state.status) { CaptureStatus.RECORDING -> "Mikrofon nahrává"; CaptureStatus.STARTING -> "Spouštění mikrofonu…"; CaptureStatus.WAITING -> "Čekám na mikrofon · automaticky navážu"; CaptureStatus.PLANNED -> "Plán aktivní · mikrofon vypnutý"; CaptureStatus.PAUSED -> "Pozastaveno · mikrofon vypnutý"; CaptureStatus.ERROR -> "Mikrofon neběží · chyba"; else -> "Připraveno ke spuštění" }, style = MaterialTheme.typography.titleMedium)
                 }
                 Spacer(Modifier.height(28.dp))
                 Text(clock(state.availableSeconds.toInt()), style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Medium)
@@ -133,15 +133,17 @@ import kotlin.math.roundToInt
             OutlinedButton(onClick = { if (canPause) ReplayService.instance?.command(ReplayService.PAUSE) else start() },
                 enabled = state.status != CaptureStatus.STARTING, modifier = Modifier.weight(1f)) {
                 Icon(if (canPause) Icons.Default.Pause else Icons.Default.PlayArrow, null)
-                Text(if (canPause) "Pozastavit" else if (state.status == CaptureStatus.PAUSED) "Pokračovat" else "Spustit")
+                Text(if (state.status == CaptureStatus.PLANNED) "Vypnout plán" else if (canPause) "Pozastavit" else if (state.status == CaptureStatus.PAUSED) "Pokračovat" else "Spustit")
             }
             OutlinedButton(onClick = { ReplayService.instance?.command(ReplayService.STOP) }, enabled = state.serviceRunning, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Default.Stop, null); Text("Zastavit")
             }
         }
         Spacer(Modifier.height(24.dp))
-        GainControl(settings.recordingGainDb) { value -> scope.launch { g.settingsRepository.update { it.copy(recordingGainDb = value) } } }
-        Spacer(Modifier.height(12.dp))
+        if (state.planArmed) {
+            InfoCard("Plán je aktivní",state.nextPlanChangeMs?.let { "Další změna: ${SimpleDateFormat("EEE d. M. HH:mm",Locale.getDefault()).format(Date(it))}. Ruční Pozastavit nebo Zastavit vypne také plán." } ?: "Další interval není naplánovaný. Buffer zůstává pro ruční uložení.")
+            Spacer(Modifier.height(12.dp))
+        }
         if (state.interruptionCount > 0) {
             InfoCard("Záznam byl přerušen (${state.interruptionCount}×)", "Historie před přerušením zůstává zachovaná. Uložený zvuk na ni naváže; doba bez přístupu k mikrofonu ve zvuku chybí.")
             Spacer(Modifier.height(12.dp))
@@ -150,21 +152,6 @@ import kotlin.math.roundToInt
         if (state.lastSaved != null) { Spacer(Modifier.height(12.dp)); InfoCard("Poslední uložení", state.lastSaved) }
         if (state.status == CaptureStatus.PAUSED) { Spacer(Modifier.height(12.dp)); Text("Po pokračování začne nová historie. Pauzu do uloženého zvuku nespojujeme.") }
         state.message?.let { Spacer(Modifier.height(16.dp)); Text(it, color = if (state.status == CaptureStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
-    }
-}
-
-@Composable private fun GainControl(value: Int, commit: (Int) -> Unit) {
-    var draft by remember(value) { mutableFloatStateOf(value.toFloat()) }
-    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp)) {
-            Text("Hlasitost ukládaného zvuku", style = MaterialTheme.typography.titleMedium)
-            Text("Zesílení +${draft.roundToInt()} dB", style = MaterialTheme.typography.bodyLarge)
-            Slider(draft, { draft = it }, valueRange = 0f..18f, steps = 17, onValueChangeFinished = { commit(draft.roundToInt()) })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0, 6, 12, 18).forEach { gain -> FilterChip(value == gain, { draft = gain.toFloat(); commit(gain) }, label = { Text("+$gain dB") }) }
-            }
-            Text("Pro další uložení, i z aktuálního bufferu. +6 dB je přibližně dvojnásobná amplituda. Příliš vysoké zesílení může zvuk zkreslit.", style = MaterialTheme.typography.bodySmall)
-        }
     }
 }
 
@@ -217,7 +204,6 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
         DurationEditor("Délka ukládaného úseku", settings.saveDurationSec, settings.bufferDurationSec, listOf(60,150,300,600,1200,1800)) { value -> update { it.copy(saveDurationSec = value) } }
         Text("Zvětšení bufferu přidá prostor pro budoucí zvuk. Již dostupná historie se tím neprodlouží.", style = MaterialTheme.typography.bodySmall)
         SectionTitle("Kvalita a soubory")
-        GainControl(settings.recordingGainDb) { value -> update { it.copy(recordingGainDb = value) } }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(32000,64000,128000).forEach { bitrate -> FilterChip(settings.bitrate == bitrate, { update { it.copy(bitrate = bitrate) } }, label = { Text("${bitrate / 1000} kb/s") }) }
         }
@@ -344,7 +330,12 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
             items(filtered, key = { it.id }) { recording ->
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp)) {
-                        Text(recording.name.removeSuffix(".m4a"), style = MaterialTheme.typography.titleSmall)
+                        Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically) {
+                            Text(recording.name.removeSuffix(".m4a"),style = MaterialTheme.typography.titleSmall,modifier = Modifier.weight(1f))
+                            IconButton(onClick = { gainOnly = true; editing = recording },enabled = state.pendingExports < 3) {
+                                Icon(Icons.AutoMirrored.Filled.VolumeUp,"Zesílit nahrávku")
+                            }
+                        }
                         Spacer(Modifier.height(6.dp))
                         Text("${clock((recording.durationUs/1_000_000).toInt())} · ${size(recording.sizeBytes)} · ${SimpleDateFormat("d. M. yyyy HH:mm", Locale.getDefault()).format(Date(recording.createdMs))}", style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -356,9 +347,6 @@ private fun durationField(seconds: Int, minutes: Boolean): String = if (!minutes
                                     .putExtra(Intent.EXTRA_STREAM, g.recordings.uri(recording)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Sdílet nahrávku")) }.onFailure { g.message("Sdílení selhalo: ${it.localizedMessage}") }
                             }) { Icon(Icons.Default.Share, "Sdílet") }
                             IconButton(onClick = { remove = recording }) { Icon(Icons.Default.Delete, "Smazat") }
-                        }
-                        TextButton(onClick = { gainOnly = true; editing = recording }, enabled = state.pendingExports < 3) {
-                            Icon(Icons.AutoMirrored.Filled.VolumeUp, null); Spacer(Modifier.width(8.dp)); Text("Zesílit nahrávku")
                         }
                     }
                 }

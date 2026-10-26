@@ -14,13 +14,11 @@ data class ReplaySettings(
     val onboardingDone: Boolean = false,
     val notificationDetails: Boolean = true,
     val notificationActions: Boolean = true,
-    val recordingGainDb: Int = 0,
 ) {
     fun normalized(): ReplaySettings = copy(
         bufferDurationSec = bufferDurationSec.coerceIn(10, 3600),
         saveDurationSec = saveDurationSec.coerceIn(10, bufferDurationSec.coerceIn(10, 3600)),
         bitrate = bitrate.takeIf { it in setOf(32000, 64000, 128000) } ?: 64000,
-        recordingGainDb = recordingGainDb.coerceIn(0, 18),
     )
     fun withBuffer(seconds: Int): ReplaySettings = copy(bufferDurationSec = seconds).normalized()
 }

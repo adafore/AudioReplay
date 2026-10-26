@@ -41,11 +41,11 @@ fun updateControls(context: Context) {
 }
 class ReplayTile : TileService() {
     override fun onStartListening() {
-        val active = graph.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING)
+        val active = graph.state.value.planArmed || graph.state.value.status in setOf(CaptureStatus.RECORDING, CaptureStatus.WAITING)
         qsTile?.apply {
             state = if (!graph.settings.value.tileEnabled) Tile.STATE_UNAVAILABLE else if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             label = "AudioReplay"
-            subtitle = if (graph.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if (active) "Uložit ${Durations.label(graph.settings.value.saveDurationSec)}" else "Otevřít aplikaci"
+            subtitle = if (graph.state.value.status == CaptureStatus.PLANNED) "Plán aktivní" else if (graph.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if (active) "Uložit ${Durations.label(graph.settings.value.saveDurationSec)}" else "Otevřít aplikaci"
             updateTile()
         }
     }
@@ -102,7 +102,7 @@ class ReplayWidget : AppWidgetProvider() {
                     setContentDescription(R.id.widget_stop,"Zastavit nahrávání")
                 }
                 if (layout == WidgetLayout.FULL) {
-                    setTextViewText(R.id.widget_status,"AudioReplay · " + if(!enabled) "Vypnutý widget" else if(active) "Nahrává" else if(g.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if(g.state.value.status == CaptureStatus.PAUSED) "Pozastaveno" else "Připraveno")
+                    setTextViewText(R.id.widget_status,"AudioReplay · " + if(!enabled) "Vypnutý widget" else if(active) "Nahrává" else if(g.state.value.status == CaptureStatus.WAITING) "Čekám na mikrofon" else if(g.state.value.status == CaptureStatus.PLANNED) "Plán aktivní" else if(g.state.value.status == CaptureStatus.PAUSED) "Pozastaveno" else "Připraveno")
                     setOnClickPendingIntent(R.id.widget_status,openActivity(context))
                 }
             }
